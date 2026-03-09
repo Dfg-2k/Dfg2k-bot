@@ -1,9 +1,9 @@
 python-telegram-bot==20.7
 requests==2.31.0
-pytz==2023.4
-pandas==2.1.4
-numpy==1.26.2
-Flask==2.3.3
+pytz==2024.1
+pandas==2.2.0
+numpy==1.26.3
+Flask==3.0.0
 gunicorn==21.2.0
-setuptools==68.2.2
-wheel==0.41.3
+wheel==0.42.0
+setuptools==69.0.3
