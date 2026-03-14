@@ -8,6 +8,7 @@ import pytz
 import pandas as pd
 import numpy as np
 import os
+from flask import Flask
 
 # ======================== KONFIGIRASYON ========================
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
@@ -27,6 +28,22 @@ PAIRS = [
     "USD/CAD (OTC)", "USD/CHF (OTC)", "USD/CNH (OTC)",
     "USD/JPY (OTC)", "USD/MXN (OTC)", "USD/NOK (OTC)", "USD/SEK (OTC)"
 ]
+
+# ======================== STATISTIK ========================
+statistik = {"win": 0, "loss": 0, "total": 0}
+siyal_aktif = {}  # Pour suivre les signaux en cours
+
+# ======================== LIS MOUN KI GEN DWA ========================
+AUTHORIZED_USERS = [
+    123456789,  # Mete ID ou isit la
+]
+
+def verifye_dwa(chat_id):
+    """Tcheke si moun nan gen dwa itilize bot la"""
+    if chat_id not in AUTHORIZED_USERS:
+        print(f"🚫 Aksè refize pou ID: {chat_id}")
+        return False
+    return True
 
 # ======================== FONKSYON POU JWENN LÈ NEW YORK ========================
 def jwenn_le_new_york():
@@ -52,7 +69,7 @@ def jwenn_done_twelve_data(pair):
     }
     
     try:
-        response = requests.get(url, params=params)
+        response = requests.get(url, params=params, timeout=10)
         data = response.json()
         
         if "values" in data:
@@ -63,9 +80,12 @@ def jwenn_done_twelve_data(pair):
             df['low'] = pd.to_numeric(df['low'])
             df['open'] = pd.to_numeric(df['open'])
             return df
+        elif "code" in data and data["code"] == 429:
+            return "limit"
         else:
             return None
-    except:
+    except Exception as e:
+        print(f"❌ Erè API: {e}")
         return None
 
 def kalkile_rsi(data, period=14):
@@ -132,7 +152,12 @@ def jenere_siyal_vre(pair_chwazi=None):
     
     data = jwenn_done_twelve_data(pair)
     
-    if data is None or len(data) < 20:
+    if data == "limit":
+        siyal = random.choice(["BUY", "SELL"])
+        konfyans = 50
+        rezon = "API limit depase - Siyal oaza"
+        return pair, siyal, konfyans, rezon
+    elif data is None or len(data) < 20:
         siyal = random.choice(["BUY", "SELL"])
         konfyans = random.randint(60, 80)
         rezon = "Analiz limite"
@@ -155,7 +180,7 @@ def voye_mesaj(chat_id, text, bouton=None):
     try:
         requests.post(url, json=data)
     except Exception as e:
-        print(f"Erè: {e}")
+        print(f"Erè lè voye mesaj: {e}")
 
 def modifye_mesaj(chat_id, message_id, text, bouton=None):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/editMessageText"
@@ -171,7 +196,22 @@ def modifye_mesaj(chat_id, message_id, text, bouton=None):
     try:
         requests.post(url, json=data)
     except Exception as e:
-        print(f"Erè: {e}")
+        print(f"Erè lè modifye mesaj: {e}")
+
+def voye_imaj(chat_id, foto, caption=""):
+    """Voye yon imaj ak opsyon caption"""
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
+    data = {
+        "chat_id": chat_id,
+        "photo": foto,
+        "caption": caption,
+        "parse_mode": "Markdown"
+    }
+    
+    try:
+        requests.post(url, json=data)
+    except Exception as e:
+        print(f"Erè lè voye imaj: {e}")
 
 def kreye_bouton_pairs():
     bouton = []
@@ -186,13 +226,29 @@ def kreye_bouton_pairs():
     return bouton
 
 def voye_siyal_ak_preparasyon(chat_id, message_id, pair, siyal, konfyans, rezon):
+    # Lè kounye a (New York)
     le_kounye_a = jwenn_le_new_york()
     le_antre = le_kounye_a + timedelta(minutes=1)
     le_kounye_a_str = le_kounye_a.strftime("%H:%M:%S")
     le_antre_str = le_antre.strftime("%H:%M:%S")
+    le_fen = le_antre + timedelta(minutes=1)
+    le_fen_str = le_fen.strftime("%H:%M:%S")
     
     emoji_siyal = "🟢" if siyal == "BUY" else "🔴"
     
+    # Estoke enfòmasyon siyal la
+    siyal_id = f"{chat_id}_{message_id}"
+    siyal_aktif[siyal_id] = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "pair": pair,
+        "siyal": siyal,
+        "le_antre": le_antre_str,
+        "le_fen": le_fen_str,
+        "konfyans": konfyans
+    }
+    
+    # PREMYE MESAJ: Avètisman 1 minit anvan
     mesaj_preparasyon = f"""⚠️ *AVÈTISMAN SIYAL* ⚠️
 
 ━━━━━━━━━━━━━━━━━━━
@@ -204,6 +260,7 @@ def voye_siyal_ak_preparasyon(chat_id, message_id, pair, siyal, konfyans, rezon)
 
 🕐 *Lè New York kounye a:* {le_kounye_a_str}
 ⏳ *Lè pou antre:* {le_antre_str}
+⌛️ *Lè pou fèmen:* {le_fen_str}
 
 ━━━━━━━━━━━━━━━━━━━
 🔥 *PREPARE KOUNYE A!*
@@ -215,6 +272,7 @@ def voye_siyal_ak_preparasyon(chat_id, message_id, pair, siyal, konfyans, rezon)
     modifye_mesaj(chat_id, message_id, mesaj_preparasyon)
     time.sleep(60)
     
+    # DEZYÈM MESAJ: Kòmanse konte a (60 segonn)
     for i in range(60, 0, -1):
         le_kounye_a = jwenn_le_new_york()
         le_antre_str = (le_kounye_a + timedelta(seconds=i)).strftime("%H:%M:%S")
@@ -230,6 +288,7 @@ def voye_siyal_ak_preparasyon(chat_id, message_id, pair, siyal, konfyans, rezon)
 
 ⏳ *Antre nan:* {i}s
 🕐 *Lè New York:* {le_kounye_a.strftime("%H:%M:%S")}
+⌛️ *Lè pou antre:* {le_antre_str}
 ━━━━━━━━━━━━━━━━━━━
 
 💡 *RETE KALM EPI SWIV PLAN AN*"""
@@ -237,35 +296,35 @@ def voye_siyal_ak_preparasyon(chat_id, message_id, pair, siyal, konfyans, rezon)
         modifye_mesaj(chat_id, message_id, text)
         time.sleep(1)
     
+    # TWAZYÈM MESAJ: Apre konte a fini (mande rezilta)
     le_fen = jwenn_le_new_york()
     
-    text_final = f"""✅ *DFG2K SIYAL TRADING* ✅
+    text_final = f"""⏰ *TRADE FÈMEN* ⏰
 
 ━━━━━━━━━━━━━━━━━━━
 **{pair}**
 {emoji_siyal} Siyal: *{siyal}*
 📊 Konfyans: {konfyans}%
-📌 Rezon: {rezon}
 ━━━━━━━━━━━━━━━━━━━
 
-🕐 *Lè New York:* {le_fen.strftime("%H:%M:%S")}
+🕐 *Lè fèmen:* {le_fen.strftime("%H:%M:%S")}
 ━━━━━━━━━━━━━━━━━━━
 
-🔥 *ESKE OU ANTRE?* 🔥"""
+🔥 *KISA REZILTA A?* 🔥
+
+Klike anba a pou rapòte:"""
     
     bouton = [[
-        {"text": "✅ WIN", "callback_data": f"win_{pair}"},
-        {"text": "❌ LOSS", "callback_data": f"loss_{pair}"}
+        {"text": "✅ WIN", "callback_data": f"win_{pair}_{message_id}"},
+        {"text": "❌ LOSS", "callback_data": f"loss_{pair}_{message_id}"}
     ]]
     
     modifye_mesaj(chat_id, message_id, text_final, bouton)
 
 # ======================== JESYON KOMAN ========================
 last_update_id = 0
-statistik = {"win": 0, "loss": 0, "total": 0}
 
 # Flask server pou Koyeb
-from flask import Flask
 app = Flask(__name__)
 
 @app.route('/')
@@ -273,7 +332,7 @@ def home():
     return "🤖 DFG2K Bot ap mache 24/7!"
 
 def run_bot():
-    global last_update_id, statistik
+    global last_update_id, statistik, siyal_aktif
     print("🤖 Bot la ap kouri...")
     
     while True:
@@ -288,12 +347,39 @@ def run_bot():
                 for update in response["result"]:
                     last_update_id = update["update_id"]
                     
+                    # Tcheke si se yon mesaj
                     if "message" in update and "text" in update["message"]:
                         chat_id = update["message"]["chat"]["id"]
                         text = update["message"]["text"]
                         
+                        # Verifye dwa
+                        if not verifye_dwa(chat_id):
+                            continue
+                        
                         if text == "/start":
-                            voye_mesaj(chat_id, "🎯 BYENVENI NAN DFG2K BOT!\n\n/siyal - jwenn siyal")
+                            mesaj_byenveni = f"""🎯 *BYENVENI NAN DFG2K SIYAL BOT* 🎯
+
+Mwen se yon bot ki bay siyal trading an tan reyèl pou **Pocket Option** ak lòt plateforme.
+
+━━━━━━━━━━━━━━━━━━━
+*📊 KOMAN DISPONIB:*
+/siyal - Jwenn yon siyal imedyat
+/swiv - Kòmanse swiv siyal otomatik
+/estatistik - Wè pèfòmans bot la
+/ede - Jwenn èd
+
+━━━━━━━━━━━━━━━━━━━
+*💡 KIJAN LI MARCHE?*
+1️⃣ Tape /siyal
+2️⃣ M ap bay yon siyal ak nivo konfyans
+3️⃣ Apre 1 minit, konfime si se WIN oswa LOSS
+
+━━━━━━━━━━━━━━━━━━━
+🕐 *Lè New York:* {format_le_ny()}
+━━━━━━━━━━━━━━━━━━━
+👑 Devlope pa @Dfg2k"""
+                            
+                            voye_mesaj(chat_id, mesaj_byenveni)
                         
                         elif text == "/siyal":
                             voye_mesaj(chat_id, "🔄 Ap chèche siyal...")
@@ -304,7 +390,16 @@ def run_bot():
                             
                             result = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={
                                 "chat_id": chat_id,
-                                "text": f"📊 NOUVO SIYAL\n\n{emoji} {siyal}\n{pair}\n{konfyans}%\n{rezon}",
+                                "text": f"""📊 *NOUVO SIYAL DETECTE*
+
+━━━━━━━━━━━━━━━━━━━
+**{pair}**
+{emoji} Siyal: *{siyal}*
+📈 Konfyans: {konfyans}%
+📌 Rezon: {rezon}
+━━━━━━━━━━━━━━━━━━━
+
+⏰ *Map voye detay yo...* 🔄""",
                                 "parse_mode": "Markdown"
                             }).json()
                             
@@ -312,24 +407,132 @@ def run_bot():
                                 message_id = result["result"]["message_id"]
                                 threading.Thread(target=voye_siyal_ak_preparasyon, 
                                                args=(chat_id, message_id, pair, siyal, konfyans, rezon)).start()
+                        
+                        elif text == "/swiv":
+                            voye_mesaj(chat_id, """⚙️ *FONKSYON AN DEVELOPMENT*
+
+Pou kounye a, ou ka itilize /siyal pou jwenn siyal manyèlman.
+
+*Vèsyon Pwochen an pral gen:*
+✅ Siyal otomatik chak 30 minit
+✅ Notifikasyon an tan reyèl
+
+Mèsi paske w ap itilize DFG2K Bot! 🙏""")
+                        
+                        elif text == "/estatistik":
+                            win_rate = (statistik["win"] / statistik["total"] * 100) if statistik["total"] > 0 else 0
+                            mesaj_stat = f"""📊 *ESTATISTIK BOT LA*
+
+━━━━━━━━━━━━━━━━━━━
+✅ Win: {statistik['win']}
+❌ Loss: {statistik['loss']}
+📊 Total: {statistik['total']}
+📈 Win Rate: {win_rate:.1f}%
+━━━━━━━━━━━━━━━━━━━
+
+🕐 *Lè New York:* {format_le_ny()}
+━━━━━━━━━━━━━━━━━━━
+
+*Kontinye fè konfyans nan siyal yo!* 💪"""
+                            voye_mesaj(chat_id, mesaj_stat)
+                        
+                        elif text == "/ede":
+                            mesaj_ede = f"""📚 *ÈD AK SIPO*
+
+━━━━━━━━━━━━━━━━━━━
+*KOMAN YO:*
+/siyal - Jwenn siyal imedyat
+/swiv - Kòmanse swiv otomatik
+/estatistik - Wè pèfòmans
+
+━━━━━━━━━━━━━━━━━━━
+*KOU MANJE:*
+1️⃣ Tape /siyal pou jwenn siyal
+2️⃣ Antre trade a nan 60s
+3️⃣ Apre 1 minit, di si se WIN oswa LOSS
+4️⃣ Gade estatistik ou amelyore!
+
+━━━━━━━━━━━━━━━━━━━
+*KONTAK ADMIN:*
+👤 @Dfg2k
+
+Mèsi paske w ap itilize bot sa! 🙏"""
+                            voye_mesaj(chat_id, mesaj_ede)
                     
+                    # Tcheke si se yon repons bouton (WIN/LOSS)
                     elif "callback_query" in update:
                         cb = update["callback_query"]
                         chat_id = cb["message"]["chat"]["id"]
                         message_id = cb["message"]["message_id"]
                         data = cb["data"]
                         
+                        # Reponn pou retire chajman an
                         requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/answerCallbackQuery",
                                      json={"callback_query_id": cb["id"]})
                         
                         if data.startswith("win_"):
+                            parts = data.split("_")
+                            pair = parts[1]
+                            siyal_id = f"{chat_id}_{parts[2]}"
+                            
                             statistik["win"] += 1
                             statistik["total"] += 1
-                            modifye_mesaj(chat_id, message_id, f"✅ WIN!")
+                            
+                            siyal_info = siyal_aktif.get(siyal_id, {})
+                            le_antre = siyal_info.get("le_antre", "N/A")
+                            le_fen = siyal_info.get("le_fen", "N/A")
+                            
+                            mesaj_konfimasyon = f"""✅ *WIN KONFIRME* ✅
+
+━━━━━━━━━━━━━━━━━━━
+**{pair}**
+━━━━━━━━━━━━━━━━━━━
+📊 Rezilta: *WIN* 🎉
+⏰ Lè antre: {le_antre}
+⏰ Lè fèmen: {le_fen}
+━━━━━━━━━━━━━━━━━━━
+📈 Win rate: {statistik['win']/statistik['total']*100:.1f}%
+━━━━━━━━━━━━━━━━━━━
+
+Felisitasyon! 🎉"""
+                            
+                            modifye_mesaj(chat_id, message_id, mesaj_konfimasyon)
+                            
+                            # Retire siyal la nan lis aktif
+                            if siyal_id in siyal_aktif:
+                                del siyal_aktif[siyal_id]
+                        
                         elif data.startswith("loss_"):
+                            parts = data.split("_")
+                            pair = parts[1]
+                            siyal_id = f"{chat_id}_{parts[2]}"
+                            
                             statistik["loss"] += 1
                             statistik["total"] += 1
-                            modifye_mesaj(chat_id, message_id, f"❌ LOSS")
+                            
+                            siyal_info = siyal_aktif.get(siyal_id, {})
+                            le_antre = siyal_info.get("le_antre", "N/A")
+                            le_fen = siyal_info.get("le_fen", "N/A")
+                            
+                            mesaj_konfimasyon = f"""❌ *LOSS KONFIRME* ❌
+
+━━━━━━━━━━━━━━━━━━━
+**{pair}**
+━━━━━━━━━━━━━━━━━━━
+📊 Rezilta: *LOSS* 😢
+⏰ Lè antre: {le_antre}
+⏰ Lè fèmen: {le_fen}
+━━━━━━━━━━━━━━━━━━━
+📈 Win rate: {statistik['win']/statistik['total']*100:.1f}%
+━━━━━━━━━━━━━━━━━━━
+
+Pa dekouraje, pwochen an ap pi bon! 💪"""
+                            
+                            modifye_mesaj(chat_id, message_id, mesaj_konfimasyon)
+                            
+                            # Retire siyal la nan lis aktif
+                            if siyal_id in siyal_aktif:
+                                del siyal_aktif[siyal_id]
             
             time.sleep(1)
         except Exception as e:
