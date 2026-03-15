@@ -5,11 +5,14 @@ from datetime import datetime, timedelta
 import threading
 import json
 import pytz
+import pandas as pd
+import numpy as np
 import os
 from flask import Flask
 
 # ======================== KONFIGIRASYON ========================
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
+TWELVE_DATA_API_KEY = os.environ.get('TWELVE_DATA_API_KEY')
 POCKET_OPTION_EMAIL = os.environ.get('POCKET_OPTION_EMAIL')
 POCKET_OPTION_PASSWORD = os.environ.get('POCKET_OPTION_PASSWORD')
 
@@ -121,12 +124,124 @@ def format_le_ny():
     le_ny = jwenn_le_new_york()
     return le_ny.strftime("%H:%M:%S")
 
-# ======================== JENERE SIYAL (SAN API) ========================
-def jenere_siyal():
-    pair = random.choice(PAIRS)
-    siyal = random.choice(["BUY", "SELL"])
-    konfyans = random.randint(65, 90)
-    rezon = f"Analiz teknik - RSI {random.randint(30, 70)}"
+# ======================== FONKSYON POU JWENN DONE AK ANALIZ ========================
+def jwenn_done_twelve_data(pair):
+    """Jwenn done mache nan Twelve Data API"""
+    if "(OTC)" in pair:
+        pair = pair.replace(" (OTC)", "")
+    
+    url = f"https://api.twelvedata.com/time_series"
+    params = {
+        "symbol": pair,
+        "interval": "1min",
+        "outputsize": 50,
+        "apikey": TWELVE_DATA_API_KEY
+    }
+    
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        data = response.json()
+        
+        if "values" in data:
+            df = pd.DataFrame(data["values"])
+            df = df.iloc[::-1]
+            df['close'] = pd.to_numeric(df['close'])
+            df['high'] = pd.to_numeric(df['high'])
+            df['low'] = pd.to_numeric(df['low'])
+            df['open'] = pd.to_numeric(df['open'])
+            return df
+        elif "code" in data and data["code"] == 429:
+            return "limit"
+        else:
+            return None
+    except Exception as e:
+        print(f"❌ Erè Twelve Data API: {e}")
+        return None
+
+def kalkile_rsi(data, period=14):
+    """Kalkile RSI (Relative Strength Index)"""
+    close = data['close']
+    delta = close.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+def kalkile_macd(data):
+    """Kalkile MACD"""
+    exp1 = data['close'].ewm(span=12, adjust=False).mean()
+    exp2 = data['close'].ewm(span=26, adjust=False).mean()
+    macd = exp1 - exp2
+    signal = macd.ewm(span=9, adjust=False).mean()
+    histogram = macd - signal
+    return macd, signal, histogram
+
+def analize_siyal(data):
+    """Analize done pou detekte siyal BUY/SELL"""
+    if data is None or len(data) < 20:
+        return random.choice(["BUY", "SELL"]), 60, "Done limite"
+    
+    try:
+        # Kalkile endikatè
+        rsi = kalkile_rsi(data)
+        macd, signal, hist = kalkile_macd(data)
+        
+        # Dènye valè yo
+        dernye_rsi = rsi.iloc[-1] if len(rsi) > 0 else 50
+        dernye_hist = hist.iloc[-1] if len(hist) > 0 else 0
+        anvan_hist = hist.iloc[-2] if len(hist) > 1 else 0
+        
+        pri_aktuèl = data['close'].iloc[-1]
+        pri_anvan = data['close'].iloc[-2] if len(data) > 1 else pri_aktuèl
+        
+        # Siyal BUY
+        if dernye_rsi < 45:
+            if dernye_hist > anvan_hist or pri_aktuèl > pri_anvan:
+                konfyans = int(70 - (dernye_rsi / 2))
+                konfyans = max(60, min(90, konfyans))
+                return "BUY", konfyans, f"RSI {dernye_rsi:.1f} + MACD ap monte"
+        
+        # Siyal SELL
+        if dernye_rsi > 55:
+            if dernye_hist < anvan_hist or pri_aktuèl < pri_anvan:
+                konfyans = int(60 + (dernye_rsi / 3))
+                konfyans = max(60, min(90, konfyans))
+                return "SELL", konfyans, f"RSI {dernye_rsi:.1f} + MACD ap desann"
+        
+        # Si pa gen siyal klè
+        if dernye_rsi < 50:
+            return "BUY", 55, f"RSI {dernye_rsi:.1f} - Tendans pozitif"
+        else:
+            return "SELL", 55, f"RSI {dernye_rsi:.1f} - Tendans negatif"
+            
+    except Exception as e:
+        print(f"Erè nan analiz: {e}")
+        return random.choice(["BUY", "SELL"]), 60, "Analiz limite"
+
+def jenere_siyal(pair_chwazi=None):
+    """Jenere siyal ki baze sou analiz teknik vre ak Twelve Data"""
+    
+    if pair_chwazi:
+        pair = pair_chwazi
+    else:
+        pair = random.choice(PAIRS)
+    
+    # Jwenn done mache
+    data = jwenn_done_twelve_data(pair)
+    
+    if data == "limit":
+        siyal = random.choice(["BUY", "SELL"])
+        konfyans = 50
+        rezon = "API limit depase - Siyal oaza"
+        return pair, siyal, konfyans, rezon
+    elif data is None or len(data) < 20:
+        siyal = random.choice(["BUY", "SELL"])
+        konfyans = random.randint(60, 80)
+        rezon = "Analiz limite - Siyal endikatè"
+        return pair, siyal, konfyans, rezon
+    
+    siyal, konfyans, rezon = analize_siyal(data)
     return pair, siyal, konfyans, rezon
 
 # ======================== FONKSYON TELEGRAM ========================
@@ -174,6 +289,18 @@ def voye_siyal_ak_preparasyon(chat_id, message_id, pair, siyal, konfyans, rezon)
     le_fen_str = le_fen.strftime("%H:%M:%S")
     
     emoji_siyal = "🟢" if siyal == "BUY" else "🔴"
+    
+    # Estoke enfòmasyon siyal la
+    siyal_id = f"{chat_id}_{message_id}"
+    siyal_aktif[siyal_id] = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "pair": pair,
+        "siyal": siyal,
+        "le_antre": le_antre_str,
+        "le_fen": le_fen_str,
+        "konfyans": konfyans
+    }
     
     # PREMYE MESAJ: Avètisman 1 minit anvan
     mesaj_preparasyon = f"""⚠️ *AVÈTISMAN SIYAL* ⚠️
@@ -223,70 +350,30 @@ def voye_siyal_ak_preparasyon(chat_id, message_id, pair, siyal, konfyans, rezon)
         modifye_mesaj(chat_id, message_id, text)
         time.sleep(1)
     
-    # Voye mesaj pou di ke bot la ap trade
-    modifye_mesaj(chat_id, message_id, "🔄 *Ap fè trade a sou Pocket Option...*\nTann 1 minit...")
+    # TWAZYÈM MESAJ: Apre konte a fini
+    le_fen_aktuel = jwenn_le_new_york()
     
-    # Fè trade a sou Pocket Option
-    rezilta = trade_pocket_option(pair, siyal, montan=10, expiration=60)
-    
-    if rezilta is not None:
-        if rezilta > 0:  # WIN
-            statistik["win"] += 1
-            statistik["total"] += 1
-            
-            mesaj_final = f"""✅ *WIN - TRADE OTOMATIK* ✅
+    text_final = f"""⏰ *TRADE FÈMEN* ⏰
 
 ━━━━━━━━━━━━━━━━━━━
 **{pair}**
 {emoji_siyal} Siyal: *{siyal}*
 📊 Konfyans: {konfyans}%
 ━━━━━━━━━━━━━━━━━━━
-💰 *Pwofi: +${rezilta:.2f}*
-🕐 *Lè fèmen:* {le_fen.strftime("%H:%M:%S")}
-━━━━━━━━━━━━━━━━━━━
-📈 Win rate: {statistik['win']/statistik['total']*100:.1f}%
+
+🕐 *Lè New York:* {le_fen_aktuel.strftime("%H:%M:%S")}
 ━━━━━━━━━━━━━━━━━━━
 
-Felisitasyon! 🎉"""
-            
-        elif rezilta == 0:  # LOSS
-            statistik["loss"] += 1
-            statistik["total"] += 1
-            
-            mesaj_final = f"""❌ *LOSS - TRADE OTOMATIK* ❌
+🔥 *KISA REZILTA A?* 🔥
 
-━━━━━━━━━━━━━━━━━━━
-**{pair}**
-{emoji_siyal} Siyal: *{siyal}*
-📊 Konfyans: {konfyans}%
-━━━━━━━━━━━━━━━━━━━
-💸 *Pèt: -$10.00*
-🕐 *Lè fèmen:* {le_fen.strftime("%H:%M:%S")}
-━━━━━━━━━━━━━━━━━━━
-📈 Win rate: {statistik['win']/statistik['total']*100:.1f}%
-━━━━━━━━━━━━━━━━━━━
-
-Pa dekouraje, pwochen an ap pi bon! 💪"""
-        else:
-            mesaj_final = f"""⚠️ *TRADE PA KONFIRME* ⚠️
-
-━━━━━━━━━━━━━━━━━━━
-**{pair}**
-{emoji_siyal} Siyal: *{siyal}*
-━━━━━━━━━━━━━━━━━━━
-
-Pa ka jwenn rezilta a. Tanpri verifye manyèlman."""
-    else:
-        mesaj_final = f"""⚠️ *TRADE PA FET* ⚠️
-
-━━━━━━━━━━━━━━━━━━━
-**{pair}**
-{emoji_siyal} Siyal: *{siyal}*
-━━━━━━━━━━━━━━━━━━━
-
-Pa ka konekte ak Pocket Option. Tanpri tcheke enfòmasyon ou yo."""
+Klike anba a pou rapòte:"""
     
-    modifye_mesaj(chat_id, message_id, mesaj_final)
+    bouton = [[
+        {"text": "✅ WIN", "callback_data": f"win_{pair}_{message_id}"},
+        {"text": "❌ LOSS", "callback_data": f"loss_{pair}_{message_id}"}
+    ]]
+    
+    modifye_mesaj(chat_id, message_id, text_final, bouton)
 
 def mete_ajou_estatistik():
     global statistik
@@ -306,7 +393,7 @@ def home():
     return "🤖 DFG2K Bot ap mache 24/7!"
 
 def run_bot():
-    global last_update_id, statistik
+    global last_update_id, statistik, siyal_aktif
     
     # Eseye konekte ak Pocket Option demaraj
     if PO_AVAILABLE:
@@ -346,9 +433,8 @@ Mwen se yon bot ki bay siyal trading an tan reyèl pou **Pocket Option** ak lòt
 ━━━━━━━━━━━━━━━━━━━
 *💡 KIJAN LI MARCHE?*
 1️⃣ Tape /siyal
-2️⃣ M ap bay yon siyal
-3️⃣ M ap fè trade a pou ou otomatikman
-4️⃣ M ap ba ou rezilta a (WIN/LOSS)
+2️⃣ M ap bay yon siyal ak nivo konfyans
+3️⃣ Apre 1 minit, konfime si se WIN oswa LOSS
 
 ━━━━━━━━━━━━━━━━━━━
 🕐 *Lè New York kounye a:* {format_le_ny()}
@@ -378,7 +464,7 @@ Pou kounye a, ou ka itilize /siyal pou jwenn siyal.
 
 *Vèsyon Pwochen an pral gen:*
 ✅ Siyal otomatik chak 30 minit
-✅ Trade otomatik san enteripsyon
+✅ Notifikasyon an tan reyèl
 
 Mèsi paske w ap itilize DFG2K Bot! 🙏""")
                         
@@ -404,31 +490,9 @@ Mèsi paske w ap itilize DFG2K Bot! 🙏""")
 
 ━━━━━━━━━━━━━━━━━━━
 *KOMAN YO:*
-/siyal - Jwenn siyal ak trade otomatik
+/siyal - Jwenn siyal imedyat
 /swiv - Kòmanse swiv otomatik
 /estatistik - Wè pèfòmans
 
 ━━━━━━━━━━━━━━━━━━━
-*💡 KOU MANJE:*
-1️⃣ Tape /siyal pou jwenn siyal
-2️⃣ Bot la ap fè trade a pou ou
-3️⃣ Apre 1 minit, w ap wè rezilta a
-4️⃣ Pa bezwen klike anyen!
-
-━━━━━━━━━━━━━━━━━━━
-*KONTAK ADMIN:*
-👤 @Dfg2k
-
-Mèsi paske w ap itilize bot sa! 🙏"""
-                            voye_mesaj(chat_id, mesaj_ede)
-            
-            time.sleep(1)
-        except Exception as e:
-            print(f"Erè: {e}")
-            time.sleep(5)
-
-# Kòmanse bot la nan yon thread
-threading.Thread(target=run_bot, daemon=True).start()
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
+*KOU MANJE:
