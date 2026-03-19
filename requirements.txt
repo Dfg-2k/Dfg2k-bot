@@ -1,1 +1,7 @@
-
+requests
+flask
+gunicorn
+pytz
+pandas
+numpy
+binaryoptionstoolsv2
