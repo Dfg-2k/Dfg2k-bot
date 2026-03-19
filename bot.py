@@ -15,7 +15,7 @@ BOT_REAL = True
 except ImportError:
 BOT_REAL = False
 
-logging.basicConfig(format=”%(asctime)s %(levelname)s %(message)s”, level=logging.INFO)
+logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO)
 logger = logging.getLogger(**name**)
 
 # ══════════════════════════════════════════════════════════════════════════════
