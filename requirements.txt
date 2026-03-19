@@ -4,4 +4,4 @@ gunicorn
 pytz
 pandas
 numpy
-binaryoptionstoolsv2
+binaryoptionstoolsV2
