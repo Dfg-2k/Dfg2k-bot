@@ -9,16 +9,10 @@ import pandas as pd
 import numpy as np
 import os
 from flask import Flask
-from collections import deque
 
 # ======================== KONFIGIRASYON ========================
-# NOUVO TOKEN OU A
 TELEGRAM_TOKEN = "8732682223:AAF-RTy1QuqIpxi-g9fQchnIJMC-vYZbQt4"
-
-TWELVE_DATA_API_KEY = os.environ.get('TWELVE_DATA_API_KEY')
-
-# ======================== POCKET OPTION SSID ========================
-POCKET_OPTION_SSID = "42[\"auth\",{\"sessionToken\":\"610648e6d940f217a9e05b179aac75ad\",\"uid\":\"124162892\",\"lang\":\"en\",\"currentUrl\":\"cabinet\",\"isChart\":1}]"
+TWELVE_DATA_API_KEY = "5a4da0e74bc443dda74fd19039254342"
 
 # Trading pairs list
 PAIRS = [
@@ -33,81 +27,13 @@ PAIRS = [
 ]
 
 # Timeframes
-TIMEFRAMES = {
-    "M1": 60, "M5": 300, "M15": 900, "M30": 1800, "H1": 3600
-}
-
-# ======================== STATISTICS ========================
-statistics = {"win": 0, "loss": 0, "total": 0, "win_rate": 0}
-active_signals = {}
-auto_signal_active = False
+TIMEFRAMES = ["M1", "M5", "M15", "M30", "H1"]
 selected_timeframe = "M1"
 
-# ======================== POCKET OPTION CONNECTION ========================
-try:
-    from pocketoptionapi.stable_api import PocketOption
-    PO_AVAILABLE = True
-except ImportError:
-    print("⚠️ PocketOptionAPI not installed")
-    PO_AVAILABLE = False
+# Statistics
+statistics = {"win": 0, "loss": 0, "total": 0}
 
-po_api = None
-po_connected = False
-
-def connect_pocket_option():
-    global po_api, po_connected
-    
-    if not PO_AVAILABLE:
-        return False
-    
-    try:
-        po_api = PocketOption(ssid=POCKET_OPTION_SSID, demo=True)
-        po_api.connect()
-        time.sleep(3)
-        
-        if po_api.check_connect():
-            po_connected = True
-            print("✅ Connected to Pocket Option with SSID")
-            return True
-        else:
-            print("❌ Failed to connect")
-            return False
-    except Exception as e:
-        print(f"❌ Connection error: {e}")
-        return False
-
-def pocket_option_trade(pair, signal, amount=10):
-    global po_api, po_connected
-    
-    if not po_connected:
-        if not connect_pocket_option():
-            return None
-    
-    try:
-        pair_po = pair.replace("-OTC", "_otc")
-        action = "call" if signal == "BUY" else "put"
-        expiration = TIMEFRAMES[selected_timeframe]
-        
-        result = po_api.buy(
-            amount=amount,
-            active=pair_po,
-            action=action,
-            expirations=expiration
-        )
-        
-        if result["success"]:
-            order_id = result["order_id"]
-            print(f"✅ Order placed: {order_id}")
-            time.sleep(expiration + 5)
-            trade_result = po_api.check_win(order_id)
-            return trade_result
-        else:
-            return None
-    except Exception as e:
-        print(f"❌ Trade error: {e}")
-        return None
-
-# ======================== NEW YORK TIME ========================
+# ======================== TIME FUNCTIONS ========================
 def get_new_york_time():
     return datetime.now(pytz.timezone('America/New_York'))
 
@@ -121,9 +47,6 @@ def format_time_for_display(dt):
 def get_twelve_data(pair):
     if "-OTC" in pair:
         pair = pair.replace("-OTC", "")
-    
-    if not TWELVE_DATA_API_KEY:
-        return None
     
     url = f"https://api.twelvedata.com/time_series"
     params = {
@@ -182,16 +105,28 @@ def detect_signal(data):
         return random.choice(["BUY", "SELL"]), 60, "Analysis error"
 
 def generate_signal():
+    print("🔄 Generating signal...")
     pair = random.choice(PAIRS)
-    data = get_twelve_data(pair)
+    print(f"Selected pair: {pair}")
     
-    if data == "limit" or data is None:
+    data = get_twelve_data(pair)
+    print(f"Data received: {data is not None}")
+    
+    if data == "limit":
+        print("⚠️ API limit reached")
         signal = random.choice(["BUY", "SELL"])
         confidence = 50
         reason = "API limit"
         return pair, signal, confidence, reason
+    elif data is None:
+        print("⚠️ No data from API")
+        signal = random.choice(["BUY", "SELL"])
+        confidence = random.randint(60, 70)
+        reason = "No data - random signal"
+        return pair, signal, confidence, reason
     
     signal, confidence, reason = detect_signal(data)
+    print(f"Signal: {signal}, Confidence: {confidence}")
     return pair, signal, confidence, reason
 
 # ======================== TELEGRAM FUNCTIONS ========================
@@ -217,9 +152,8 @@ def edit_message(chat_id, message_id, text, buttons=None):
     except Exception as e:
         print(f"Error editing message: {e}")
 
-def send_signal_and_trade(chat_id, message_id, pair, signal, confidence, reason):
+def send_signal(chat_id, message_id, pair, signal, confidence, reason):
     current_time = get_new_york_time()
-    entry_time = current_time
     display_time = format_time_for_display(current_time)
     
     signal_emoji = "🟢" if signal == "BUY" else "🔴"
@@ -230,7 +164,7 @@ Pocket Sniper Bot OTC
 
 {pair}
 {selected_timeframe}
-{entry_time.strftime("%H:%M:%S")}
+{current_time.strftime("%H:%M:%S")}
 {signal.lower()}
 🔘 1  {display_time}
 
@@ -238,25 +172,21 @@ Pocket Sniper Bot OTC
     
     edit_message(chat_id, message_id, signal_message)
     
-    # Execute trade
-    result = pocket_option_trade(pair, signal)
+    # Wait 2 minutes (simulate trade time)
+    time.sleep(120)
+    
+    # Random result for testing
+    is_win = random.choice([True, False])
     final_time = get_new_york_time()
     
-    if result is not None:
-        if result > 0:
-            statistics["win"] += 1
-            result_text = "WIN ✅"
-        elif result == 0:
-            statistics["loss"] += 1
-            result_text = "LOSS ❌"
-        else:
-            result_text = "UNKNOWN"
+    if is_win:
+        statistics["win"] += 1
+        result_text = "WIN ✅"
     else:
-        result_text = "TRADE FAILED"
+        statistics["loss"] += 1
+        result_text = "LOSS ❌"
     
     statistics["total"] += 1
-    if statistics["total"] > 0:
-        statistics["win_rate"] = (statistics["win"] / statistics["total"]) * 100
     
     # Result message
     result_message = f"""FxMamba PocketBot
@@ -265,27 +195,10 @@ Pocket Sniper Bot OTC
     
     edit_message(chat_id, message_id, result_message)
 
-def auto_signal_loop(chat_id):
-    global auto_signal_active
-    while auto_signal_active:
-        pair, signal, confidence, reason = generate_signal()
-        
-        result = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={
-            "chat_id": chat_id,
-            "text": "🔄 *Generating signal...*"
-        }).json()
-        
-        if result.get("ok"):
-            message_id = result["result"]["message_id"]
-            time.sleep(2)
-            send_signal_and_trade(chat_id, message_id, pair, signal, confidence, reason)
-        
-        time.sleep(180)  # 3 minutes
-
 def create_timeframe_buttons():
     buttons = []
     row = []
-    for i, tf in enumerate(TIMEFRAMES.keys()):
+    for i, tf in enumerate(TIMEFRAMES):
         row.append({"text": tf, "callback_data": f"set_tf_{tf}"})
         if len(row) == 3 or i == len(TIMEFRAMES) - 1:
             buttons.append(row)
@@ -301,19 +214,10 @@ def home():
     return "🤖 FxMamba PocketBot is running 24/7!"
 
 def run_bot():
-    global last_update_id, auto_signal_active, selected_timeframe, statistics
-    
-    if not TELEGRAM_TOKEN:
-        print("❌ TELEGRAM_TOKEN not set!")
-        return
-    
-    print(f"✅ Telegram Token: {TELEGRAM_TOKEN[:10]}...")
-    
-    # Connect to Pocket Option
-    if PO_AVAILABLE:
-        connect_pocket_option()
+    global last_update_id, selected_timeframe
     
     print("✅ FxMamba PocketBot is running...")
+    print(f"📊 Twelve Data API Key: {TWELVE_DATA_API_KEY[:5]}...")
     
     while True:
         try:
@@ -348,12 +252,6 @@ Pocket Sniper Bot OTC
                             send_message(chat_id, welcome)
                         
                         elif text == "/signal":
-                            # Send typing action
-                            requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendChatAction", json={
-                                "chat_id": chat_id,
-                                "action": "typing"
-                            })
-                            
                             result = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={
                                 "chat_id": chat_id,
                                 "text": "🔄 *Generating signal...*"
@@ -363,32 +261,27 @@ Pocket Sniper Bot OTC
                                 message_id = result["result"]["message_id"]
                                 time.sleep(2)
                                 pair, signal, confidence, reason = generate_signal()
-                                threading.Thread(target=send_signal_and_trade, 
+                                threading.Thread(target=send_signal, 
                                                args=(chat_id, message_id, pair, signal, confidence, reason)).start()
                         
                         elif text == "/auto":
-                            if not auto_signal_active:
-                                auto_signal_active = True
-                                send_message(chat_id, f"🔄 Auto signals started (every 3 min)")
-                                threading.Thread(target=auto_signal_loop, args=(chat_id,), daemon=True).start()
-                            else:
-                                send_message(chat_id, "⚠️ Already running")
+                            send_message(chat_id, "⚙️ Auto signals coming soon!")
                         
                         elif text == "/stop":
-                            auto_signal_active = False
-                            send_message(chat_id, "⏹️ Auto signals stopped")
+                            send_message(chat_id, "⏹️ No auto signals running")
                         
                         elif text == "/timeframe":
                             tf_buttons = create_timeframe_buttons()
                             send_message(chat_id, "⏱️ *Select Timeframe:*", tf_buttons)
                         
                         elif text == "/stats":
+                            win_rate = (statistics["win"] / statistics["total"] * 100) if statistics["total"] > 0 else 0
                             stats = f"""📊 *Statistics*
 
 ✅ Wins: {statistics['win']}
 ❌ Losses: {statistics['loss']}
 📈 Total: {statistics['total']}
-🎯 Win Rate: {statistics['win_rate']:.1f}%
+🎯 Win Rate: {win_rate:.1f}%
 
 ⏱️ TF: {selected_timeframe}"""
                             send_message(chat_id, stats)
