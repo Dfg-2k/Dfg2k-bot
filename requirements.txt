@@ -1,7 +1,0 @@
-requests
-flask
-gunicorn
-pytz
-pandas
-numpy
-binaryoptionstoolsV2
