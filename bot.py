@@ -1,9 +1,3 @@
-“””
-Dfg Sniper Bot OTC — Siyal REYÈL via BinaryOptionsToolsV2
-Estrateji: RSI + EMA crossover + Chandèl pattern (otomatik)
-Lè: New York UTC-5
-“””
-
 import os
 import asyncio
 import logging
