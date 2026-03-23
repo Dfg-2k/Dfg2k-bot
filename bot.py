@@ -61,63 +61,71 @@ async def connect_pocket_option():
     cookie_string = f"ci_session={CI_SESSION}; lang=en; is_pwa=0; loggedin=1"
     headers = {
         "Origin": "https://pocketoption.com",
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "Sec-WebSocket-Extensions": "permessage-deflate; client_max_window_bits",
+        "Sec-WebSocket-Version": "13",
         "Cookie": cookie_string
     }
     uri = "wss://api-l.po.market/socket.io/?EIO=4&transport=websocket"
+    
     ssl_context = ssl.create_default_context()
     ssl_context.check_hostname = False
     ssl_context.verify_mode = ssl.CERT_NONE
     
     try:
         print("🔄 Connecting to Pocket Option...")
-        # Nouvo fason pou konekte ki travay ak tout vèsyon
-        ws = await websockets.connect(uri, ssl=ssl_context)
-        
-        # Ajoute headers apre koneksyon
-        for key, value in headers.items():
-            ws.headers[key] = value
-        
-        print("✅ Connected!")
-        ws_connected = True
-        
-        await ws.recv()
-        await ws.send("40")
-        await ws.recv()
-        
-        auth = json.dumps(["auth", {"session": SESSION_TOKEN, "isDemo": 0, "uid": int(USER_ID), "platform": 2}])
-        await ws.send(f"42{auth}")
-        await asyncio.sleep(2)
-        
-        for pair in OTC_PAIRS:
-            sub = json.dumps(["subscribe-symbol", {"asset": pair["po"], "period": 60}])
-            await ws.send(f"42{sub}")
-        
-        print("✅ Subscribed to all pairs!")
-        send_telegram("✅ Bot connected! Starting analysis...")
-        
-        while True:
-            try:
-                msg = await asyncio.wait_for(ws.recv(), timeout=30)
-                if msg == "2":
-                    await ws.send("3")
-                elif "42[" in msg:
-                    data = json.loads(msg[2:])
-                    if isinstance(data, list) and len(data) > 1:
-                        p = data[1]
-                        asset = p.get("asset", "")
-                        price = p.get("price", 0)
-                        if asset and price:
-                            otc_prices[asset] = float(price)
-            except asyncio.TimeoutError:
-                await ws.send("2")
-            except websockets.exceptions.ConnectionClosed:
-                print("Connection closed, reconnecting...")
-                break
-            except Exception as e:
-                print(f"Error: {e}")
-                break
-                
+        # Itilize extra_headers ki kòrèk
+        async with websockets.connect(
+            uri, 
+            extra_headers=headers,
+            ssl=ssl_context,
+            ping_interval=25,
+            ping_timeout=20
+        ) as ws:
+            print("✅ Connected!")
+            ws_connected = True
+            
+            await ws.recv()
+            await ws.send("40")
+            await ws.recv()
+            
+            auth = json.dumps(["auth", {"session": SESSION_TOKEN, "isDemo": 0, "uid": int(USER_ID), "platform": 2}])
+            await ws.send(f"42{auth}")
+            await asyncio.sleep(2)
+            
+            for pair in OTC_PAIRS:
+                sub = json.dumps(["subscribe-symbol", {"asset": pair["po"], "period": 60}])
+                await ws.send(f"42{sub}")
+            
+            print("✅ Subscribed to all pairs!")
+            send_telegram("✅ Bot connected! Starting analysis...")
+            
+            while True:
+                try:
+                    msg = await asyncio.wait_for(ws.recv(), timeout=30)
+                    if msg == "2":
+                        await ws.send("3")
+                    elif "42[" in msg:
+                        data = json.loads(msg[2:])
+                        if isinstance(data, list) and len(data) > 1:
+                            p = data[1]
+                            asset = p.get("asset", "")
+                            price = p.get("price", 0)
+                            if asset and price:
+                                otc_prices[asset] = float(price)
+                except asyncio.TimeoutError:
+                    await ws.send("2")
+                except websockets.exceptions.ConnectionClosed:
+                    print("Connection closed, reconnecting...")
+                    break
+                except Exception as e:
+                    print(f"Error: {e}")
+                    break
+                    
     except Exception as e:
         print(f"Connection failed: {e}")
         ws_connected = False
