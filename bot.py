@@ -8,7 +8,6 @@ import ssl
 from datetime import datetime, timedelta
 import pytz
 import random
-import os
 
 # ==================== CREDENTIALS ====================
 TELEGRAM_TOKEN = "8705108751:AAFeqmGHcF5AA61×XbaYbm4Qqcp-lr7wM5A"
@@ -69,39 +68,56 @@ async def connect_pocket_option():
     ssl_context = ssl.create_default_context()
     ssl_context.check_hostname = False
     ssl_context.verify_mode = ssl.CERT_NONE
+    
     try:
         print("🔄 Connecting to Pocket Option...")
-        async with websockets.connect(uri, extra_headers=headers, ssl=ssl_context) as ws:
-            print("✅ Connected!")
-            ws_connected = True
-            await ws.recv()
-            await ws.send("40")
-            await ws.recv()
-            auth = json.dumps(["auth", {"session": SESSION_TOKEN, "isDemo": 0, "uid": int(USER_ID), "platform": 2}])
-            await ws.send(f"42{auth}")
-            await asyncio.sleep(2)
-            for pair in OTC_PAIRS:
-                sub = json.dumps(["subscribe-symbol", {"asset": pair["po"], "period": 60}])
-                await ws.send(f"42{sub}")
-            print("✅ Subscribed to all pairs!")
-            send_telegram("✅ Bot connected! Starting analysis...")
-            while True:
-                try:
-                    msg = await asyncio.wait_for(ws.recv(), timeout=30)
-                    if msg == "2":
-                        await ws.send("3")
-                    elif "42[" in msg:
-                        data = json.loads(msg[2:])
-                        if isinstance(data, list) and len(data) > 1:
-                            p = data[1]
-                            asset = p.get("asset", "")
-                            price = p.get("price", 0)
-                            if asset and price:
-                                otc_prices[asset] = float(price)
-                except asyncio.TimeoutError:
-                    await ws.send("2")
-                except:
-                    break
+        # Nouvo fason pou konekte ki travay ak tout vèsyon
+        ws = await websockets.connect(uri, ssl=ssl_context)
+        
+        # Ajoute headers apre koneksyon
+        for key, value in headers.items():
+            ws.headers[key] = value
+        
+        print("✅ Connected!")
+        ws_connected = True
+        
+        await ws.recv()
+        await ws.send("40")
+        await ws.recv()
+        
+        auth = json.dumps(["auth", {"session": SESSION_TOKEN, "isDemo": 0, "uid": int(USER_ID), "platform": 2}])
+        await ws.send(f"42{auth}")
+        await asyncio.sleep(2)
+        
+        for pair in OTC_PAIRS:
+            sub = json.dumps(["subscribe-symbol", {"asset": pair["po"], "period": 60}])
+            await ws.send(f"42{sub}")
+        
+        print("✅ Subscribed to all pairs!")
+        send_telegram("✅ Bot connected! Starting analysis...")
+        
+        while True:
+            try:
+                msg = await asyncio.wait_for(ws.recv(), timeout=30)
+                if msg == "2":
+                    await ws.send("3")
+                elif "42[" in msg:
+                    data = json.loads(msg[2:])
+                    if isinstance(data, list) and len(data) > 1:
+                        p = data[1]
+                        asset = p.get("asset", "")
+                        price = p.get("price", 0)
+                        if asset and price:
+                            otc_prices[asset] = float(price)
+            except asyncio.TimeoutError:
+                await ws.send("2")
+            except websockets.exceptions.ConnectionClosed:
+                print("Connection closed, reconnecting...")
+                break
+            except Exception as e:
+                print(f"Error: {e}")
+                break
+                
     except Exception as e:
         print(f"Connection failed: {e}")
         ws_connected = False
