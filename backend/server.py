@@ -44,12 +44,12 @@ bot_state = {
     "total_losses": 0
 }
 
-# 35 OTC Pairs to monitor
+# 35 OTC Pairs to monitor (unique pairs)
 OTC_PAIRS = [
     "NZD/JPY", "EUR/CHF", "EUR/USD", "AUD/USD", "GBP/USD", "USD/JPY", "AUD/NZD",
     "USD/CAD", "GBP/JPY", "AUD/CHF", "CAD/JPY", "NZD/USD", "GBP/NZD", "AUD/JPY",
-    "CAD/CHF", "EUR/CAD", "GBP/NZD", "NZD/CHF", "USD/CHF", "EUR/GBP", "EUR/JPY",
-    "GBP/CHF", "CAD/JPY", "CHF/JPY", "USD/MXN", "USD/ZAR", "USD/TRY", "USD/SGD",
+    "CAD/CHF", "EUR/CAD", "EUR/AUD", "NZD/CHF", "USD/CHF", "EUR/GBP", "EUR/JPY",
+    "GBP/CHF", "GBP/CAD", "CHF/JPY", "USD/MXN", "USD/ZAR", "USD/TRY", "USD/SGD",
     "USD/HKD", "USD/DKK", "USD/NOK", "USD/SEK", "EUR/SEK", "EUR/NOK", "GBP/DKK"
 ]
 
