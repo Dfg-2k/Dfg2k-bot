@@ -365,77 +365,209 @@ async def run_analysis():
     
     logging.info(f"Analysis complete. Found {len(signals_found)} signals.")
 
-async def simulate_trade_results():
-    """Simulate trade results for pending signals (for demo purposes)"""
-    # Find pending signals older than 5 minutes
-    five_mins_ago = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+async def check_trade_result(signal: dict) -> Optional[str]:
+    """Check actual trade result by comparing prices"""
+    pair = signal.get("pair")
+    direction = signal.get("direction")
+    
+    # Fetch current market data
+    data = await fetch_market_data(pair)
+    if not data or "values" not in data:
+        return None
+    
+    values = data["values"]
+    if len(values) < 2:
+        return None
+    
+    # Get the last two candles to determine result
+    # Current candle close vs previous candle close
+    current_close = float(values[0]["close"])
+    previous_close = float(values[1]["close"])
+    
+    # Determine if trade won
+    if direction == "BUY":
+        # BUY wins if price went up
+        won = current_close > previous_close
+    else:
+        # SELL wins if price went down
+        won = current_close < previous_close
+    
+    return "WIN" if won else "LOSS"
+
+async def process_trade_results():
+    """Process pending signals and check their results"""
+    global bot_state
+    
+    if not bot_state["running"]:
+        return
+    
+    # Find signals that are pending and entry time has passed (at least 2 minutes ago)
+    two_mins_ago = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
+    
     pending = await db.signals.find({
         "result": None,
-        "created_at": {"$lt": five_mins_ago}
+        "created_at": {"$lt": two_mins_ago}
     }, {"_id": 0}).to_list(100)
     
     for signal in pending:
-        # Simulate result with ~80% win rate
-        import random
-        martingale = signal.get("martingale_level", 0)
+        signal_id = signal["id"]
+        martingale_level = signal.get("martingale_level", 0)
+        pair = signal["pair"]
+        direction = signal["direction"]
+        entry_time = signal["entry_time"]
         
-        # Higher confidence = higher win probability
-        confidence = signal.get("confidence", 65)
-        win_prob = min(0.6 + (confidence - 65) * 0.01, 0.9)
+        # Check actual trade result
+        result = await check_trade_result(signal)
         
-        if random.random() < win_prob:
-            # WIN
-            result = "WIN"
+        if result is None:
+            continue  # Skip if we couldn't get data
+        
+        otc_pair = pair.replace("/", "") + "-OTC"
+        
+        if result == "WIN":
+            # Trade won!
             bot_state["total_wins"] += 1
-            result_msg = f"WIN ✅{'¹' if martingale == 1 else '²' if martingale == 2 else ''}" if martingale > 0 else "WIN ✅"
-        else:
-            if martingale < current_config.martingale_levels - 1:
-                # Continue to next martingale level
-                new_signal = signal.copy()
-                new_signal["id"] = str(uuid.uuid4())
-                new_signal["martingale_level"] = martingale + 1
-                new_signal["result"] = None
-                new_signal["created_at"] = datetime.now(timezone.utc).isoformat()
-                await db.signals.insert_one(new_signal)
-                result = "PENDING"
-                result_msg = None
-            else:
-                # Final loss after 3 martingale levels
-                result = "LOSS"
-                bot_state["total_losses"] += 1
-                result_msg = "Loss ❌"
-        
-        if result != "PENDING":
             await db.signals.update_one(
-                {"id": signal["id"]},
-                {"$set": {"result": result}}
+                {"id": signal_id},
+                {"$set": {"result": "WIN"}}
             )
             
-            if result_msg:
-                await send_telegram_message(f"Dfg_2k Analysis\n{result_msg}")
+            # Send WIN message with martingale level indicator
+            if martingale_level == 0:
+                win_msg = f"""Dfg_2k Analysis
+📊 {otc_pair}
+🕐 {entry_time}
+WIN ✅"""
+            else:
+                level_indicator = "¹" if martingale_level == 1 else "²" if martingale_level == 2 else ""
+                win_msg = f"""Dfg_2k Analysis
+📊 {otc_pair}
+🕐 {entry_time}
+WIN ✅{level_indicator}"""
+            
+            await send_telegram_message(win_msg)
+            
+            # Log to telegram messages
+            await db.telegram_messages.insert_one({
+                "id": str(uuid.uuid4()),
+                "signal_id": signal_id,
+                "message": win_msg,
+                "sent_at": datetime.now(timezone.utc).isoformat(),
+                "success": True,
+                "type": "result"
+            })
+            
+        else:
+            # Trade lost
+            if martingale_level < current_config.martingale_levels - 1:
+                # Continue to next martingale level - create new signal
+                new_entry_time = get_ny_time() + timedelta(minutes=1)
+                new_signal = {
+                    "id": str(uuid.uuid4()),
+                    "pair": pair,
+                    "direction": direction,
+                    "entry_time": format_time_ny(new_entry_time),
+                    "confidence": signal.get("confidence", 65),
+                    "rsi": signal.get("rsi", 50),
+                    "ema9": signal.get("ema9", 0),
+                    "ema21": signal.get("ema21", 0),
+                    "stochastic": signal.get("stochastic", 50),
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "result": None,
+                    "martingale_level": martingale_level + 1,
+                    "telegram_sent": True
+                }
+                await db.signals.insert_one(new_signal)
+                
+                # Mark current signal as continued
+                await db.signals.update_one(
+                    {"id": signal_id},
+                    {"$set": {"result": "MARTINGALE"}}
+                )
+                
+                # Send martingale continuation message
+                level_num = martingale_level + 2  # Level 2 or 3
+                direction_emoji = "🟢" if direction == "BUY" else "🔴"
+                direction_text = "Buy" if direction == "BUY" else "Sell"
+                
+                martingale_msg = f"""Dfg_2k Analysis
+🔄 MARTINGALE Level {level_num}
 
-async def send_summary_report():
-    """Send summary report every 15 trades"""
-    global bot_state
+📊 {otc_pair}
+💎 M1
+🕐 {format_time_ny(new_entry_time)}
+{direction_emoji} {direction_text}"""
+                
+                await send_telegram_message(martingale_msg)
+                
+                await db.telegram_messages.insert_one({
+                    "id": str(uuid.uuid4()),
+                    "signal_id": new_signal["id"],
+                    "message": martingale_msg,
+                    "sent_at": datetime.now(timezone.utc).isoformat(),
+                    "success": True,
+                    "type": "martingale"
+                })
+                
+            else:
+                # Final loss after 3 martingale levels
+                bot_state["total_losses"] += 1
+                await db.signals.update_one(
+                    {"id": signal_id},
+                    {"$set": {"result": "LOSS"}}
+                )
+                
+                loss_msg = f"""Dfg_2k Analysis
+📊 {otc_pair}
+🕐 {entry_time}
+Loss ❌"""
+                
+                await send_telegram_message(loss_msg)
+                
+                await db.telegram_messages.insert_one({
+                    "id": str(uuid.uuid4()),
+                    "signal_id": signal_id,
+                    "message": loss_msg,
+                    "sent_at": datetime.now(timezone.utc).isoformat(),
+                    "success": True,
+                    "type": "result"
+                })
     
-    total = bot_state["total_wins"] + bot_state["total_losses"]
-    if total > 0 and total % 15 == 0:
-        win_rate = round((bot_state["total_wins"] / total) * 100) if total > 0 else 0
+    # Check if we need to send summary report
+    await check_summary_report()
+
+async def check_summary_report():
+    """Send summary report every 15 completed trades"""
+    total_completed = bot_state["total_wins"] + bot_state["total_losses"]
+    
+    if total_completed > 0 and total_completed % 15 == 0:
+        # Check if we already sent report for this count
+        last_report = await db.telegram_messages.find_one(
+            {"type": "summary", "trade_count": total_completed},
+            {"_id": 0}
+        )
+        if last_report:
+            return  # Already sent
+        
+        win_rate = round((bot_state["total_wins"] / total_completed) * 100) if total_completed > 0 else 0
         ny_time = get_ny_time()
         
-        # Get recent signals
+        # Get recent completed signals
         recent = await db.signals.find(
-            {"result": {"$ne": None}},
+            {"result": {"$in": ["WIN", "LOSS"]}},
             {"_id": 0}
         ).sort("created_at", -1).limit(15).to_list(15)
         
         results_lines = []
         for s in reversed(recent):
             otc_pair = s["pair"].replace("/", "") + "-OTC"
-            result_text = "WIN" if s["result"] == "WIN" else "LOSS ✖"
+            if s["result"] == "WIN":
+                result_text = "WIN ✅"
+            else:
+                result_text = "LOSS ✖"
             results_lines.append(f"{otc_pair} {s['entry_time']} {result_text}")
         
-        message = f"""Dfg_2k Analysis
+        summary_msg = f"""Dfg_2k Analysis
 📋 Last Hour Results ({format_time_ny(ny_time)} UTC-5)
 
 {chr(10).join(results_lines)}
@@ -447,7 +579,16 @@ async def send_summary_report():
 
 Channel Overall Win Rate: {win_rate}% ({bot_state['total_wins']}W/{bot_state['total_losses']}L)"""
         
-        await send_telegram_message(message)
+        await send_telegram_message(summary_msg)
+        
+        await db.telegram_messages.insert_one({
+            "id": str(uuid.uuid4()),
+            "message": summary_msg,
+            "sent_at": datetime.now(timezone.utc).isoformat(),
+            "success": True,
+            "type": "summary",
+            "trade_count": total_completed
+        })
 
 # API Routes
 @api_router.get("/")
@@ -486,10 +627,10 @@ async def start_bot():
         replace_existing=True
     )
     
-    # Schedule result simulation every 5 minutes
+    # Schedule result checking every 2 minutes
     scheduler.add_job(
-        simulate_trade_results,
-        IntervalTrigger(minutes=5),
+        process_trade_results,
+        IntervalTrigger(minutes=2),
         id="trade_results",
         replace_existing=True
     )
