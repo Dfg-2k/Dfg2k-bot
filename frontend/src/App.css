@@ -1,34 +1,156 @@
-.App-logo {
-    height: 40vmin;
-    pointer-events: none;
-}
+/* Trading Bot Dashboard Styles */
 
-@media (prefers-reduced-motion: no-preference) {
-    .App-logo {
-        animation: App-logo-spin infinite 20s linear;
-    }
-}
-
-.App-header {
-    background-color: #0f0f10;
+.dashboard-container {
     min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    font-size: calc(10px + 2vmin);
-    color: white;
+    background-color: #09090B;
 }
 
-.App-link {
-    color: #61dafb;
+/* Header styles */
+.dashboard-header {
+    background-color: #09090B;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    position: sticky;
+    top: 0;
+    z-index: 50;
 }
 
-@keyframes App-logo-spin {
-    from {
-        transform: rotate(0deg);
+/* Grid layout */
+.dashboard-grid {
+    display: grid;
+    grid-template-columns: repeat(1, 1fr);
+    gap: 1rem;
+}
+
+@media (min-width: 768px) {
+    .dashboard-grid {
+        grid-template-columns: repeat(3, 1fr);
+        gap: 1.5rem;
     }
-    to {
-        transform: rotate(360deg);
+}
+
+@media (min-width: 1024px) {
+    .dashboard-grid {
+        grid-template-columns: repeat(4, 1fr);
     }
+}
+
+/* Signal direction badges */
+.badge-buy {
+    background-color: rgba(16, 185, 129, 0.15);
+    color: #10B981;
+    border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.badge-sell {
+    background-color: rgba(239, 68, 68, 0.15);
+    color: #EF4444;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+/* Result badges */
+.badge-win {
+    background-color: rgba(16, 185, 129, 0.2);
+    color: #10B981;
+}
+
+.badge-loss {
+    background-color: rgba(239, 68, 68, 0.2);
+    color: #EF4444;
+}
+
+.badge-pending {
+    background-color: rgba(245, 158, 11, 0.2);
+    color: #F59E0B;
+}
+
+/* Metric cards */
+.metric-value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 2rem;
+    font-weight: 600;
+    line-height: 1;
+}
+
+.metric-label {
+    font-size: 0.75rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #71717A;
+}
+
+/* Pair grid */
+.pair-chip {
+    background-color: #1A1A1D;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 4px;
+    padding: 0.5rem 0.75rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    transition: all 0.2s ease;
+}
+
+.pair-chip:hover {
+    border-color: rgba(255, 255, 255, 0.25);
+    background-color: #242427;
+}
+
+.pair-chip.active-signal {
+    border-color: #00E5FF;
+    background-color: rgba(0, 229, 255, 0.1);
+}
+
+/* Telegram message card */
+.telegram-message {
+    background-color: #1A1A1D;
+    border-left: 3px solid #00E5FF;
+    padding: 0.75rem 1rem;
+    margin-bottom: 0.5rem;
+    border-radius: 0 4px 4px 0;
+    font-size: 0.875rem;
+    white-space: pre-line;
+}
+
+/* Config panel */
+.config-input {
+    background-color: #1A1A1D;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #FAFAFA;
+    font-family: 'JetBrains Mono', monospace;
+}
+
+.config-input:focus {
+    border-color: #00E5FF;
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(0, 229, 255, 0.2);
+}
+
+/* Chart container */
+.chart-container {
+    background-color: #121214;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+    padding: 1rem;
+}
+
+/* Loading state */
+.loading-pulse {
+    animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes pulse {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.5;
+    }
+}
+
+/* Responsive table */
+.table-container {
+    overflow-x: auto;
+}
+
+.table-container table {
+    min-width: 600px;
 }

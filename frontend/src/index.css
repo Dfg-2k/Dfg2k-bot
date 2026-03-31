@@ -1,75 +1,195 @@
+@import url('https://fonts.googleapis.com/css2?family=Chivo:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+:root {
+    --bg-base: #09090B;
+    --bg-surface: #121214;
+    --bg-elevated: #1A1A1D;
+    --text-primary: #FAFAFA;
+    --text-secondary: #A1A1AA;
+    --text-muted: #71717A;
+    --border-subtle: rgba(255, 255, 255, 0.08);
+    --border-strong: rgba(255, 255, 255, 0.15);
+    --signal-buy: #10B981;
+    --signal-buy-bg: rgba(16, 185, 129, 0.15);
+    --signal-sell: #EF4444;
+    --signal-sell-bg: rgba(239, 68, 68, 0.15);
+    --warning: #F59E0B;
+    --info: #3B82F6;
+    --accent: #00E5FF;
+    --status-running: #10B981;
+    --status-stopped: #A1A1AA;
+    --status-error: #EF4444;
+}
+
 body {
     margin: 0;
-    font-family:
-        -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen",
-        "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue",
-        sans-serif;
+    font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    background-color: var(--bg-base);
+    color: var(--text-primary);
+    background-image: url('https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzF8MHwxfHNlYXJjaHwyfHxhYnN0cmFjdCUyMGRhcmslMjB0cmFkaW5nJTIwY2hhcnQlMjBiYWNrZ3JvdW5kfGVufDB8fHx8MTc3NDk1MDAyOHww&ixlib=rb-4.1.0&q=85');
+    background-size: cover;
+    background-attachment: fixed;
+    background-blend-mode: overlay;
+}
+
+body::before {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(9, 9, 11, 0.95);
+    z-index: -1;
+}
+
+.font-chivo {
+    font-family: 'Chivo', sans-serif;
+}
+
+.font-plex {
+    font-family: 'IBM Plex Sans', sans-serif;
+}
+
+.font-mono {
+    font-family: 'JetBrains Mono', monospace;
 }
 
 code {
-    font-family:
-        source-code-pro, Menlo, Monaco, Consolas, "Courier New", monospace;
+    font-family: 'JetBrains Mono', source-code-pro, Menlo, Monaco, Consolas, monospace;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--bg-surface);
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--border-strong);
+    border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
+}
+
+/* Animations */
+@keyframes pulse-glow {
+    0%, 100% {
+        box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4);
+    }
+    50% {
+        box-shadow: 0 0 0 8px rgba(16, 185, 129, 0);
+    }
+}
+
+@keyframes flash-green {
+    0% { background-color: rgba(16, 185, 129, 0.3); }
+    100% { background-color: transparent; }
+}
+
+@keyframes flash-red {
+    0% { background-color: rgba(239, 68, 68, 0.3); }
+    100% { background-color: transparent; }
+}
+
+.animate-pulse-glow {
+    animation: pulse-glow 2s ease-in-out infinite;
+}
+
+.flash-win {
+    animation: flash-green 1s ease-out;
+}
+
+.flash-loss {
+    animation: flash-red 1s ease-out;
+}
+
+/* Card styles */
+.dashboard-card {
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    transition: border-color 0.2s ease-in-out;
+}
+
+.dashboard-card:hover {
+    border-color: var(--border-strong);
+}
+
+.signal-card-buy {
+    border-color: var(--signal-buy);
+    box-shadow: 0 0 20px rgba(16, 185, 129, 0.15);
+}
+
+.signal-card-sell {
+    border-color: var(--signal-sell);
+    box-shadow: 0 0 20px rgba(239, 68, 68, 0.15);
+}
+
+/* Status indicator */
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+}
+
+.status-running {
+    background-color: var(--status-running);
+    animation: pulse-glow 2s ease-in-out infinite;
+}
+
+.status-stopped {
+    background-color: var(--status-stopped);
+}
+
+/* Table styles */
+.striped-row:nth-child(odd) {
+    background-color: var(--bg-surface);
+}
+
+.striped-row:nth-child(even) {
+    background-color: var(--bg-elevated);
 }
 
 @layer base {
     :root {
-        --background: 0 0% 100%;
-        --foreground: 0 0% 3.9%;
-        --card: 0 0% 100%;
-        --card-foreground: 0 0% 3.9%;
-        --popover: 0 0% 100%;
-        --popover-foreground: 0 0% 3.9%;
-        --primary: 0 0% 9%;
-        --primary-foreground: 0 0% 98%;
-        --secondary: 0 0% 96.1%;
-        --secondary-foreground: 0 0% 9%;
-        --muted: 0 0% 96.1%;
-        --muted-foreground: 0 0% 45.1%;
-        --accent: 0 0% 96.1%;
-        --accent-foreground: 0 0% 9%;
-        --destructive: 0 84.2% 60.2%;
-        --destructive-foreground: 0 0% 98%;
-        --border: 0 0% 89.8%;
-        --input: 0 0% 89.8%;
-        --ring: 0 0% 3.9%;
-        --chart-1: 12 76% 61%;
-        --chart-2: 173 58% 39%;
-        --chart-3: 197 37% 24%;
-        --chart-4: 43 74% 66%;
-        --chart-5: 27 87% 67%;
-        --radius: 0.5rem;
-    }
-    .dark {
         --background: 0 0% 3.9%;
         --foreground: 0 0% 98%;
-        --card: 0 0% 3.9%;
+        --card: 0 0% 7%;
         --card-foreground: 0 0% 98%;
-        --popover: 0 0% 3.9%;
+        --popover: 0 0% 7%;
         --popover-foreground: 0 0% 98%;
-        --primary: 0 0% 98%;
+        --primary: 180 100% 45%;
         --primary-foreground: 0 0% 9%;
-        --secondary: 0 0% 14.9%;
+        --secondary: 0 0% 10%;
         --secondary-foreground: 0 0% 98%;
         --muted: 0 0% 14.9%;
         --muted-foreground: 0 0% 63.9%;
         --accent: 0 0% 14.9%;
         --accent-foreground: 0 0% 98%;
-        --destructive: 0 62.8% 30.6%;
+        --destructive: 0 62.8% 50%;
         --destructive-foreground: 0 0% 98%;
         --border: 0 0% 14.9%;
         --input: 0 0% 14.9%;
-        --ring: 0 0% 83.1%;
-        --chart-1: 220 70% 50%;
-        --chart-2: 160 60% 45%;
-        --chart-3: 30 80% 55%;
-        --chart-4: 280 65% 60%;
-        --chart-5: 340 75% 55%;
+        --ring: 180 100% 45%;
+        --chart-1: 142 76% 36%;
+        --chart-2: 0 84% 60%;
+        --chart-3: 45 93% 47%;
+        --chart-4: 199 89% 48%;
+        --chart-5: 280 65% 60%;
+        --radius: 0.375rem;
     }
 }
 
@@ -85,31 +205,5 @@ code {
 @layer base {
     [data-debug-wrapper="true"] {
         display: contents !important;
-    }
-
-    [data-debug-wrapper="true"] > * {
-        margin-left: inherit;
-        margin-right: inherit;
-        margin-top: inherit;
-        margin-bottom: inherit;
-        padding-left: inherit;
-        padding-right: inherit;
-        padding-top: inherit;
-        padding-bottom: inherit;
-        column-gap: inherit;
-        row-gap: inherit;
-        gap: inherit;
-        border-left-width: inherit;
-        border-right-width: inherit;
-        border-top-width: inherit;
-        border-bottom-width: inherit;
-        border-left-style: inherit;
-        border-right-style: inherit;
-        border-top-style: inherit;
-        border-bottom-style: inherit;
-        border-left-color: inherit;
-        border-right-color: inherit;
-        border-top-color: inherit;
-        border-bottom-color: inherit;
     }
 }
