@@ -1,0 +1,104 @@
+{
+  "theme": "DARK",
+  "archetype": "Archetype 4 (Swiss & High-Contrast - Dark/Terminal Variant)",
+  "emotional_tone": "Objective, rigid, technical, reliable, command-center focus.",
+  "typography": {
+    "headings": {
+      "family": "'Chivo', sans-serif",
+      "classes": "font-chivo tracking-tight font-bold",
+      "strategy": "Used for widget titles, page headers, KPI labels. Emphasizes authority."
+    },
+    "body": {
+      "family": "'IBM Plex Sans', sans-serif",
+      "classes": "font-plex text-sm text-[#A1A1AA]",
+      "strategy": "Used for main readable content, descriptions, and standard UI elements."
+    },
+    "data_mono": {
+      "family": "'JetBrains Mono', monospace",
+      "classes": "font-mono text-sm tracking-tight font-medium",
+      "strategy": "MANDATORY for all numerical values: currency pairs, prices, indicators (RSI, EMA), win/loss stats."
+    },
+    "hierarchy": {
+      "h1": "text-3xl sm:text-4xl lg:text-5xl",
+      "h2": "text-2xl sm:text-3xl",
+      "h3": "text-xl sm:text-2xl",
+      "h4": "text-lg",
+      "body": "text-sm md:text-base",
+      "label": "text-xs tracking-[0.1em] uppercase text-[#71717A]"
+    }
+  },
+  "colors": {
+    "background": {
+      "base": "#09090B",
+      "surface": "#121214",
+      "surface_elevated": "#1A1A1D"
+    },
+    "text": {
+      "primary": "#FAFAFA",
+      "secondary": "#A1A1AA",
+      "muted": "#71717A"
+    },
+    "border": {
+      "subtle": "rgba(255, 255, 255, 0.08)",
+      "strong": "rgba(255, 255, 255, 0.15)"
+    },
+    "signals": {
+      "buy": "#10B981",
+      "buy_bg": "rgba(16, 185, 129, 0.15)",
+      "sell": "#EF4444",
+      "sell_bg": "rgba(239, 68, 68, 0.15)",
+      "warning": "#F59E0B",
+      "info": "#3B82F6"
+    },
+    "brand_accent": "#00E5FF",
+    "bot_status": {
+      "running": "#10B981",
+      "stopped": "#A1A1AA",
+      "error": "#EF4444"
+    }
+  },
+  "spacing_and_layout": {
+    "grid_mode": "MODE B: THE CONTROL ROOM GRID",
+    "base_grid": "grid-cols-1 md:grid-cols-3 lg:grid-cols-4",
+    "gap": "gap-4 md:gap-6",
+    "padding": "p-4 md:p-6",
+    "container": "max-w-[1600px] mx-auto w-full",
+    "strategies": {
+      "summary_widgets": "col-span-1 (Single metric like Win Rate, Bot Status)",
+      "chart_or_grid": "col-span-2 row-span-2 or col-span-3 (Main monitoring data/signals)",
+      "history_feed": "col-span-1 row-span-2 (Tall narrow lists of recent Telegram signals)"
+    },
+    "alignment": "Left-align dense data. Center-align only single metric summary numbers."
+  },
+  "surface_strategies": {
+    "dashboard_cards": "Grid Borders strategy. Flat background, 1px subtle border (border-[#ffffff]/10), no shadow. On hover, slight border color brighten (border-[#ffffff]/25). No heavy radiuses. Use rounded-md or rounded-sm max (4px to 6px) to keep the technical feel.",
+    "header_nav": "Solid background (bg-[#09090B]) with a hard bottom border (border-b border-[#ffffff]/10) to separate from the grid.",
+    "active_signal": "The Tracing Beam or glowing border approach. When a signal is generated, give the card a glowing 1px border matching the signal color (buy=green, sell=red)."
+  },
+  "components_instructions": {
+    "charts": "Use Recharts. Line or Area charts for prices. Monospace font for axes. Grid lines should be very faint (#ffffff/5).",
+    "tables": "Shadcn UI Table. Striped rows (bg-[#121214] and bg-[#1A1A1D]). Monospace for numbers. Sticky header.",
+    "status_indicators": "Small rounded full circles (h-2 w-2) with animate-pulse for active 'Running' status.",
+    "bot_control": "Shadcn Switch/Toggle for Start/Stop bot. Prominent placement in header or main summary card.",
+    "icons": "Use Phosphor Icons (dense, technical) or Lucide (default). Install Phosphor: `yarn add @phosphor-icons/react`",
+    "forms": "For bot configuration (confidence %, martingale levels), use Shadcn Input, Select, Slider. Form fields must have labels."
+  },
+  "motion": {
+    "hover": "Subtle border color change and text color brightening. No heavy translations.",
+    "transitions": "transition-colors duration-200 ease-in-out",
+    "data_update": "When new data arrives, flash the background color of the cell briefly (green for price up, red for price down) and fade back out."
+  },
+  "images_and_media": {
+    "background_texture": "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzF8MHwxfHNlYXJjaHwyfHxhYnN0cmFjdCUyMGRhcmslMjB0cmFkaW5nJTIwY2hhcnQlMjBiYWNrZ3JvdW5kfGVufDB8fHx8MTc3NDk1MDAyOHww&ixlib=rb-4.1.0&q=85",
+    "usage": "Use the background texture at very low opacity (e.g., 5%) fixed in the body background to break the pure solid dark grey, adding a subtle 'trading' feel."
+  },
+  "testing": {
+    "data_testid_convention": "All interactive/key elements MUST use kebab-case `data-testid` (e.g., 'start-bot-button', 'signal-row-buy', 'win-rate-metric')."
+  },
+  "setup_instructions": [
+    "Install fonts via Google Fonts in index.html or layout: Chivo, IBM Plex Sans, JetBrains Mono.",
+    "Configure Tailwind config colors to use the provided hex values.",
+    "Install Recharts for chart visualizations.",
+    "Install date-fns for timezone (UTC-5 New York) formatting."
+  ]
+}
