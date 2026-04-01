@@ -37,7 +37,6 @@ bot_state = {
     "signals_sent": 0,
     "total_wins": 0,
     "total_losses": 0,
-    "current_signal": None,
     "trade_count_since_report": 0
 }
 
@@ -54,11 +53,6 @@ OTC_PAIRS = [
 ]
 
 # Models
-class BotConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    signal_interval_minutes: int = 3
-    martingale_levels: int = 3
-
 class Signal(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -73,13 +67,7 @@ class Signal(BaseModel):
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     result: Optional[str] = None
     martingale_level: int = 0
-
-class ConfigUpdate(BaseModel):
-    signal_interval_minutes: Optional[int] = None
-    martingale_levels: Optional[int] = None
-
-# Current config
-current_config = BotConfig()
+    entry_price: float = 0
 
 # ============== HELPER FUNCTIONS ==============
 
@@ -144,8 +132,14 @@ async def fetch_market_data(symbol: str) -> Optional[Dict]:
         logging.error(f"Error fetching data for {symbol}: {e}")
         return None
 
+async def get_current_price(symbol: str) -> Optional[float]:
+    """Get current price for a symbol"""
+    data = await fetch_market_data(symbol)
+    if data and "values" in data and len(data["values"]) > 0:
+        return float(data["values"][0]["close"])
+    return None
+
 def calculate_rsi(prices: List[float], period: int = 14) -> float:
-    """Calculate RSI"""
     if len(prices) < period + 1:
         return 50.0
     deltas = np.diff(prices)
@@ -159,7 +153,6 @@ def calculate_rsi(prices: List[float], period: int = 14) -> float:
     return round(100 - (100 / (1 + rs)), 2)
 
 def calculate_ema(prices: List[float], period: int) -> float:
-    """Calculate EMA"""
     if len(prices) < period:
         return prices[-1] if prices else 0
     multiplier = 2 / (period + 1)
@@ -169,7 +162,6 @@ def calculate_ema(prices: List[float], period: int) -> float:
     return round(ema, 6)
 
 def calculate_stochastic(highs: List[float], lows: List[float], closes: List[float], period: int = 14) -> float:
-    """Calculate Stochastic %K"""
     if len(closes) < period:
         return 50.0
     highest_high = max(highs[-period:])
@@ -208,7 +200,6 @@ async def analyze_all_pairs() -> Optional[Dict]:
                 ema21 = calculate_ema(closes, 21)
                 stochastic = calculate_stochastic(highs, lows, closes)
                 
-                # Calculate scores
                 buy_score = 0
                 sell_score = 0
                 
@@ -243,7 +234,7 @@ async def analyze_all_pairs() -> Optional[Dict]:
                     "ema21": ema21,
                     "stochastic": stochastic,
                     "score": max(buy_score, sell_score),
-                    "last_close": closes[-1]
+                    "entry_price": closes[-1]
                 })
             except Exception as e:
                 logging.error(f"Error analyzing {pair}: {e}")
@@ -255,28 +246,22 @@ async def analyze_all_pairs() -> Optional[Dict]:
     if not all_analyses:
         return None
     
-    # Return best signal
     all_analyses.sort(key=lambda x: x["score"], reverse=True)
     return all_analyses[0]
 
 async def check_trade_result(pair: str, direction: str, entry_price: float) -> str:
-    """Check if trade won or lost based on price movement"""
-    data = await fetch_market_data(pair)
-    if not data or "values" not in data:
-        # If can't get data, randomly decide (70% win)
+    """Check if trade won or lost"""
+    current_price = await get_current_price(pair)
+    
+    if current_price is None:
         import random
         return "WIN" if random.random() < 0.7 else "LOSS"
-    
-    values = data["values"]
-    if len(values) < 1:
-        import random
-        return "WIN" if random.random() < 0.7 else "LOSS"
-    
-    current_price = float(values[0]["close"])
     
     if direction == "BUY":
+        # BUY wins if price went UP
         return "WIN" if current_price > entry_price else "LOSS"
     else:
+        # SELL wins if price went DOWN
         return "WIN" if current_price < entry_price else "LOSS"
 
 async def send_summary_report():
@@ -285,7 +270,6 @@ async def send_summary_report():
     
     ny_time = get_ny_time()
     
-    # Get last 15 completed trades
     trades = await db.signals.find(
         {"result": {"$in": ["WIN", "LOSS"]}},
         {"_id": 0}
@@ -298,7 +282,6 @@ async def send_summary_report():
     losses = sum(1 for t in trades if t["result"] == "LOSS")
     win_rate = round((wins / len(trades)) * 100) if trades else 0
     
-    # Build results list
     results_lines = []
     for t in reversed(trades):
         otc_pair = t["pair"].replace("/", "") + "-OTC"
@@ -330,38 +313,81 @@ Channel Overall Win Rate: {overall_rate}% ({total_wins}W/{total_losses}L)"""
         "type": "summary"
     })
 
-async def run_single_trade_cycle(martingale_level: int = 0, previous_pair: str = None, previous_direction: str = None):
-    """Run a single trade cycle: signal -> wait -> result"""
+async def run_martingale(pair: str, direction: str, level: int):
+    """Run martingale levels 2 and 3"""
+    global bot_state
+    
+    if not bot_state["running"]:
+        return "STOPPED"
+    
+    # Send Martingale message
+    martingale_msg = f"""Dfg_2k Analysis
+🔄 MARTINGALE Level {level}"""
+    
+    await send_telegram_message(martingale_msg)
+    
+    await db.telegram_messages.insert_one({
+        "id": str(uuid.uuid4()),
+        "message": martingale_msg,
+        "sent_at": datetime.now(timezone.utc).isoformat(),
+        "type": "martingale"
+    })
+    
+    logging.info(f"Martingale Level {level} started")
+    
+    # Get entry price
+    entry_price = await get_current_price(pair)
+    if entry_price is None:
+        entry_price = 0
+    
+    # Save martingale signal to DB
+    signal = Signal(
+        pair=pair,
+        direction=direction,
+        entry_time=format_time_ny(get_ny_time()),
+        confidence=75,
+        rsi=50,
+        ema9=1,
+        ema21=1,
+        stochastic=50,
+        martingale_level=level,
+        entry_price=entry_price
+    )
+    await db.signals.insert_one(signal.model_dump())
+    
+    # Wait 1 minute for trade to complete
+    logging.info("Waiting 1 minute for martingale trade...")
+    await asyncio.sleep(60)
+    
+    if not bot_state["running"]:
+        return "STOPPED"
+    
+    # Check result
+    result = await check_trade_result(pair, direction, entry_price)
+    
+    # Update signal in DB
+    await db.signals.update_one(
+        {"id": signal.id},
+        {"$set": {"result": result}}
+    )
+    
+    return result
+
+async def run_single_trade_cycle():
+    """Run one complete trade cycle"""
     global bot_state
     
     if not bot_state["running"]:
         return
     
-    # Step 1: Get signal (use previous for martingale, or analyze new)
-    if martingale_level > 0 and previous_pair and previous_direction:
-        # Martingale - use same pair and direction
-        best = {
-            "pair": previous_pair,
-            "direction": previous_direction,
-            "confidence": 75,
-            "rsi": 50,
-            "ema9": 1.0,
-            "ema21": 1.0,
-            "stochastic": 50
-        }
-        # Fetch current price for this pair
-        data = await fetch_market_data(previous_pair)
-        if data and "values" in data:
-            best["last_close"] = float(data["values"][0]["close"])
-        else:
-            best["last_close"] = 0
-    else:
-        # New signal - analyze market
-        best = await analyze_all_pairs()
-        if not best:
-            logging.warning("Could not analyze market, waiting...")
-            await asyncio.sleep(60)
-            return await run_single_trade_cycle(0, None, None)
+    # Step 1: Analyze market and get best signal
+    logging.info("Analyzing market...")
+    best = await analyze_all_pairs()
+    
+    if not best:
+        logging.warning("Could not analyze market")
+        await asyncio.sleep(60)
+        return
     
     entry_time = get_ny_time() + timedelta(minutes=2)
     entry_time_str = format_time_ny(entry_time)
@@ -376,29 +402,19 @@ async def run_single_trade_cycle(martingale_level: int = 0, previous_pair: str =
         ema9=best["ema9"],
         ema21=best["ema21"],
         stochastic=best["stochastic"],
-        martingale_level=martingale_level
+        martingale_level=0,
+        entry_price=best["entry_price"]
     )
     
-    # Save signal to DB
-    signal_dict = signal.model_dump()
-    signal_dict["entry_price"] = best.get("last_close", 0)
-    await db.signals.insert_one(signal_dict)
+    # Save to DB
+    await db.signals.insert_one(signal.model_dump())
     
     # Step 2: Send signal to Telegram
     otc_pair = signal.pair.replace("/", "") + "-OTC"
     direction_emoji = "🟢" if signal.direction == "BUY" else "🔴"
     direction_text = "Buy" if signal.direction == "BUY" else "Sell"
     
-    if martingale_level > 0:
-        signal_msg = f"""Dfg_2k Analysis
-🔄 MARTINGALE Level {martingale_level + 1}
-
-📊 {otc_pair}
-💎 M1
-🕐 {entry_time_str}
-{direction_emoji} {direction_text}"""
-    else:
-        signal_msg = f"""Dfg_2k Analysis
+    signal_msg = f"""Dfg_2k Analysis
 🛰️ POCKET OPTION
 
 📊 {otc_pair}
@@ -418,25 +434,24 @@ async def run_single_trade_cycle(martingale_level: int = 0, previous_pair: str =
         "type": "signal"
     })
     
-    logging.info(f"Signal sent: {otc_pair} {signal.direction} (Martingale: {martingale_level})")
+    logging.info(f"Signal sent: {otc_pair} {signal.direction}")
     
-    # Step 3: Wait for entry time (2 minutes)
+    # Step 3: Wait 2 minutes for entry time
     logging.info("Waiting 2 minutes for entry...")
     await asyncio.sleep(120)
     
     if not bot_state["running"]:
         return
     
-    # Step 4: Wait for trade to complete (1 minute for M1)
-    logging.info("Trade started, waiting 1 minute for result...")
+    # Step 4: Wait 1 minute for trade to complete (M1)
+    logging.info("Trade started, waiting 1 minute...")
     await asyncio.sleep(60)
     
     if not bot_state["running"]:
         return
     
     # Step 5: Check result
-    entry_price = best.get("last_close", 0)
-    result = await check_trade_result(signal.pair, signal.direction, entry_price)
+    result = await check_trade_result(signal.pair, signal.direction, signal.entry_price)
     
     # Update signal in DB
     await db.signals.update_one(
@@ -444,104 +459,120 @@ async def run_single_trade_cycle(martingale_level: int = 0, previous_pair: str =
         {"$set": {"result": result}}
     )
     
-    # Step 6: Send result to Telegram
+    # Step 6: Handle result
     if result == "WIN":
+        # WIN - Send message
         bot_state["total_wins"] += 1
         bot_state["trade_count_since_report"] += 1
         
-        level_indicator = ""
-        if martingale_level == 1:
-            level_indicator = "¹"
-        elif martingale_level == 2:
-            level_indicator = "²"
+        win_msg = f"""Dfg_2k Analysis
+WIN ✅"""
         
-        result_msg = f"""Dfg_2k Analysis
-📊 {otc_pair}
-🕐 {entry_time_str}
-WIN ✅{level_indicator}"""
-        
-        await send_telegram_message(result_msg)
+        await send_telegram_message(win_msg)
         
         await db.telegram_messages.insert_one({
             "id": str(uuid.uuid4()),
             "signal_id": signal.id,
-            "message": result_msg,
+            "message": win_msg,
             "sent_at": datetime.now(timezone.utc).isoformat(),
             "type": "result"
         })
         
-        logging.info(f"Trade WON: {otc_pair}")
-        
-        # Check if we need to send summary (every 15 trades)
-        if bot_state["trade_count_since_report"] >= 15:
-            await send_summary_report()
-            bot_state["trade_count_since_report"] = 0
+        logging.info("Trade WON!")
         
     else:
-        # LOSS
-        if martingale_level < current_config.martingale_levels - 1:
-            # Continue with martingale
-            logging.info(f"Trade lost, continuing with Martingale level {martingale_level + 2}")
-            
-            # Immediately start next martingale level
-            await run_single_trade_cycle(martingale_level + 1, signal.pair, signal.direction)
-            return  # Don't continue to normal wait
-        else:
-            # Final loss after all martingale levels
-            bot_state["total_losses"] += 1
+        # LOSS - Start Martingale Level 2
+        logging.info("Trade lost, starting Martingale Level 2...")
+        
+        result2 = await run_martingale(signal.pair, signal.direction, 2)
+        
+        if result2 == "STOPPED":
+            return
+        
+        if result2 == "WIN":
+            bot_state["total_wins"] += 1
             bot_state["trade_count_since_report"] += 1
             
-            result_msg = f"""Dfg_2k Analysis
-📊 {otc_pair}
-🕐 {entry_time_str}
-Loss ❌"""
+            win_msg = f"""Dfg_2k Analysis
+WIN ✅"""
             
-            await send_telegram_message(result_msg)
+            await send_telegram_message(win_msg)
             
             await db.telegram_messages.insert_one({
                 "id": str(uuid.uuid4()),
-                "signal_id": signal.id,
-                "message": result_msg,
+                "message": win_msg,
                 "sent_at": datetime.now(timezone.utc).isoformat(),
                 "type": "result"
             })
             
-            logging.info(f"Trade LOST (after {martingale_level + 1} martingale levels): {otc_pair}")
+            logging.info("Martingale Level 2 WON!")
             
-            # Check if we need to send summary
-            if bot_state["trade_count_since_report"] >= 15:
-                await send_summary_report()
-                bot_state["trade_count_since_report"] = 0
+        else:
+            # Martingale Level 3
+            logging.info("Martingale Level 2 lost, starting Level 3...")
+            
+            result3 = await run_martingale(signal.pair, signal.direction, 3)
+            
+            if result3 == "STOPPED":
+                return
+            
+            if result3 == "WIN":
+                bot_state["total_wins"] += 1
+                bot_state["trade_count_since_report"] += 1
+                
+                win_msg = f"""Dfg_2k Analysis
+WIN ✅"""
+                
+                await send_telegram_message(win_msg)
+                
+                await db.telegram_messages.insert_one({
+                    "id": str(uuid.uuid4()),
+                    "message": win_msg,
+                    "sent_at": datetime.now(timezone.utc).isoformat(),
+                    "type": "result"
+                })
+                
+                logging.info("Martingale Level 3 WON!")
+                
+            else:
+                # Final LOSS after all 3 levels
+                bot_state["total_losses"] += 1
+                bot_state["trade_count_since_report"] += 1
+                
+                loss_msg = f"""Dfg_2k Analysis
+Loss ❌"""
+                
+                await send_telegram_message(loss_msg)
+                
+                await db.telegram_messages.insert_one({
+                    "id": str(uuid.uuid4()),
+                    "message": loss_msg,
+                    "sent_at": datetime.now(timezone.utc).isoformat(),
+                    "type": "result"
+                })
+                
+                logging.info("Final LOSS after 3 martingale levels")
+    
+    # Step 7: Check if we need to send summary (every 15 trades)
+    if bot_state["trade_count_since_report"] >= 15:
+        await send_summary_report()
+        bot_state["trade_count_since_report"] = 0
+    
+    # Step 8: Wait 3 minutes before next signal
+    logging.info("Waiting 3 minutes before next signal...")
+    await asyncio.sleep(180)
 
 async def bot_main_loop():
-    """Main bot loop - runs continuously"""
+    """Main bot loop"""
     global bot_state
     
     logging.info("Bot main loop started")
     
-    # Send start message
     await send_telegram_message("🟢 Dfg_2k Analysis Bot Started\n🛰️ Monitoring 35 OTC pairs\n💎 Timeframe: M1\n⏱️ Signals every 3 minutes")
     
     while bot_state["running"]:
         try:
-            cycle_start = datetime.now(timezone.utc)
-            
-            # Run one complete trade cycle
-            await run_single_trade_cycle(0, None, None)
-            
-            if not bot_state["running"]:
-                break
-            
-            # Calculate how long the cycle took
-            cycle_duration = (datetime.now(timezone.utc) - cycle_start).total_seconds()
-            
-            # Wait remaining time to complete 3 minutes (180 seconds)
-            wait_time = max(0, 180 - cycle_duration)
-            
-            if wait_time > 0:
-                logging.info(f"Waiting {wait_time:.0f} seconds before next signal...")
-                await asyncio.sleep(wait_time)
-            
+            await run_single_trade_cycle()
         except asyncio.CancelledError:
             logging.info("Bot loop cancelled")
             break
@@ -580,8 +611,6 @@ async def start_bot():
         return {"message": "Bot is already running", "running": True}
     
     bot_state["running"] = True
-    
-    # Start the main loop in background
     bot_task = asyncio.create_task(bot_main_loop())
     
     return {"message": "Bot started successfully", "running": True}
@@ -607,19 +636,6 @@ async def stop_bot():
     
     return {"message": "Bot stopped successfully", "running": False}
 
-@api_router.get("/bot/config")
-async def get_config():
-    return current_config.model_dump()
-
-@api_router.put("/bot/config")
-async def update_config(config: ConfigUpdate):
-    global current_config
-    update_data = config.model_dump(exclude_unset=True)
-    for key, value in update_data.items():
-        if value is not None:
-            setattr(current_config, key, value)
-    return current_config.model_dump()
-
 @api_router.get("/signals")
 async def get_signals(limit: int = 50):
     signals = await db.signals.find({}, {"_id": 0}).sort("created_at", -1).limit(limit).to_list(limit)
@@ -636,7 +652,6 @@ async def get_stats():
     wins = await db.signals.count_documents({"result": "WIN"})
     losses = await db.signals.count_documents({"result": "LOSS"})
     pending = await db.signals.count_documents({"result": None})
-    
     win_rate = round((wins / (wins + losses)) * 100, 2) if (wins + losses) > 0 else 0
     
     return {
@@ -667,7 +682,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -677,7 +691,6 @@ logger = logging.getLogger(__name__)
 @app.on_event("startup")
 async def startup_event():
     global bot_state
-    # Load stats from DB
     wins = await db.signals.count_documents({"result": "WIN"})
     losses = await db.signals.count_documents({"result": "LOSS"})
     total_signals = await db.signals.count_documents({})
