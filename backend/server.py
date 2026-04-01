@@ -43,7 +43,7 @@ bot_state = {
 # Background task reference
 bot_task = None
 
-# 35 OTC Pairs to monitor
+# 35 OTC Pairs to monitor - using standard forex pairs (same prices)
 OTC_PAIRS = [
     "NZD/JPY", "EUR/CHF", "EUR/USD", "AUD/USD", "GBP/USD", "USD/JPY", "AUD/NZD",
     "USD/CAD", "GBP/JPY", "AUD/CHF", "CAD/JPY", "NZD/USD", "GBP/NZD", "AUD/JPY",
@@ -105,8 +105,38 @@ async def send_telegram_message(message: str) -> bool:
         logging.error(f"Error sending Telegram: {e}")
         return False
 
+async def get_quote_price(symbol: str) -> Optional[Dict]:
+    """Get real-time quote with bid/ask from Twelve Data"""
+    if not TWELVE_DATA_API_KEY:
+        return None
+    
+    url = "https://api.twelvedata.com/quote"
+    params = {
+        "symbol": symbol,
+        "apikey": TWELVE_DATA_API_KEY
+    }
+    
+    try:
+        async with httpx.AsyncClient() as http_client:
+            response = await http_client.get(url, params=params, timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                if "close" in data:
+                    return {
+                        "price": float(data["close"]),
+                        "open": float(data.get("open", data["close"])),
+                        "high": float(data.get("high", data["close"])),
+                        "low": float(data.get("low", data["close"])),
+                        "change": float(data.get("change", 0)),
+                        "percent_change": float(data.get("percent_change", 0))
+                    }
+            return None
+    except Exception as e:
+        logging.error(f"Error getting quote for {symbol}: {e}")
+        return None
+
 async def get_realtime_price(symbol: str) -> Optional[float]:
-    """Get real-time price from Twelve Data"""
+    """Get real-time price"""
     if not TWELVE_DATA_API_KEY:
         return None
     
@@ -122,13 +152,44 @@ async def get_realtime_price(symbol: str) -> Optional[float]:
             if response.status_code == 200:
                 data = response.json()
                 if "price" in data:
-                    price = float(data["price"])
-                    logging.info(f"Real-time price for {symbol}: {price}")
-                    return price
-            logging.error(f"Price API error: {response.text}")
+                    return float(data["price"])
             return None
     except Exception as e:
         logging.error(f"Error getting price for {symbol}: {e}")
+        return None
+
+async def get_latest_candle(symbol: str) -> Optional[Dict]:
+    """Get the most recent completed 1-minute candle"""
+    if not TWELVE_DATA_API_KEY:
+        return None
+    
+    url = "https://api.twelvedata.com/time_series"
+    params = {
+        "symbol": symbol,
+        "interval": "1min",
+        "outputsize": 2,
+        "apikey": TWELVE_DATA_API_KEY
+    }
+    
+    try:
+        async with httpx.AsyncClient() as http_client:
+            response = await http_client.get(url, params=params, timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                if "values" in data and len(data["values"]) >= 2:
+                    # values[0] = current incomplete candle
+                    # values[1] = last complete candle
+                    candle = data["values"][1]
+                    return {
+                        "open": float(candle["open"]),
+                        "high": float(candle["high"]),
+                        "low": float(candle["low"]),
+                        "close": float(candle["close"]),
+                        "datetime": candle["datetime"]
+                    }
+            return None
+    except Exception as e:
+        logging.error(f"Error getting candle for {symbol}: {e}")
         return None
 
 async def fetch_analysis_data(symbol: str) -> Optional[Dict]:
@@ -265,51 +326,55 @@ async def analyze_all_pairs() -> Optional[Dict]:
     all_analyses.sort(key=lambda x: x["score"], reverse=True)
     return all_analyses[0]
 
-async def execute_and_check_trade(pair: str, direction: str) -> Dict:
+async def wait_for_candle_close_and_check(pair: str, direction: str) -> Dict:
     """
-    Execute trade and check REAL result:
-    1. Get OPEN price right now
-    2. Wait exactly 60 seconds
-    3. Get CLOSE price
-    4. Compare: BUY wins if close > open, SELL wins if close < open
+    Wait for the current M1 candle to close then check if it was green or red.
+    - BUY wins if candle is GREEN (close > open)
+    - SELL wins if candle is RED (close < open)
     """
+    logging.info(f"Waiting 60 seconds for M1 candle to complete for {pair}...")
     
-    # Step 1: Get OPEN price
-    open_price = await get_realtime_price(pair)
-    if open_price is None:
-        logging.error(f"Could not get open price for {pair}")
-        return {"result": "ERROR", "open": 0, "close": 0}
-    
-    logging.info(f"TRADE START - {pair} {direction} - Open Price: {open_price}")
-    
-    # Step 2: Wait exactly 60 seconds for M1 candle
+    # Wait for candle to complete
     await asyncio.sleep(60)
     
-    # Step 3: Get CLOSE price
-    close_price = await get_realtime_price(pair)
-    if close_price is None:
-        logging.error(f"Could not get close price for {pair}")
-        return {"result": "ERROR", "open": open_price, "close": 0}
+    # Get the last completed candle
+    candle = await get_latest_candle(pair)
     
-    logging.info(f"TRADE END - {pair} - Close Price: {close_price}")
+    if candle is None:
+        logging.error(f"Could not get candle data for {pair}")
+        # Fallback to price comparison
+        return {"result": "UNKNOWN", "open": 0, "close": 0}
     
-    # Step 4: Determine result
+    open_price = candle["open"]
+    close_price = candle["close"]
+    
+    logging.info(f"Candle completed - {pair}: Open={open_price}, Close={close_price}")
+    
+    # Determine result based on candle color
     if direction == "BUY":
-        # BUY wins if price went UP (close > open)
+        # BUY wins if candle is GREEN (close > open)
         if close_price > open_price:
             result = "WIN"
-            logging.info(f"BUY WIN! Price went UP: {open_price} -> {close_price}")
-        else:
+            logging.info(f"BUY WIN - GREEN candle: {open_price} -> {close_price}")
+        elif close_price < open_price:
             result = "LOSS"
-            logging.info(f"BUY LOSS! Price went DOWN: {open_price} -> {close_price}")
-    else:
-        # SELL wins if price went DOWN (close < open)
+            logging.info(f"BUY LOSS - RED candle: {open_price} -> {close_price}")
+        else:
+            # Doji candle (open == close) - consider as loss to be safe
+            result = "LOSS"
+            logging.info(f"BUY LOSS - DOJI candle: {open_price} = {close_price}")
+    else:  # SELL
+        # SELL wins if candle is RED (close < open)
         if close_price < open_price:
             result = "WIN"
-            logging.info(f"SELL WIN! Price went DOWN: {open_price} -> {close_price}")
-        else:
+            logging.info(f"SELL WIN - RED candle: {open_price} -> {close_price}")
+        elif close_price > open_price:
             result = "LOSS"
-            logging.info(f"SELL LOSS! Price went UP: {open_price} -> {close_price}")
+            logging.info(f"SELL LOSS - GREEN candle: {open_price} -> {close_price}")
+        else:
+            # Doji candle
+            result = "LOSS"
+            logging.info(f"SELL LOSS - DOJI candle: {open_price} = {close_price}")
     
     return {
         "result": result,
@@ -367,7 +432,7 @@ Channel Overall Win Rate: {overall_rate}% ({total_wins}W/{total_losses}L)"""
     })
 
 async def run_martingale(pair: str, direction: str, level: int) -> Dict:
-    """Run martingale - trade again with same direction"""
+    """Run martingale - wait for next candle and check color"""
     global bot_state
     
     if not bot_state["running"]:
@@ -386,13 +451,13 @@ async def run_martingale(pair: str, direction: str, level: int) -> Dict:
         "type": "martingale"
     })
     
-    logging.info(f"Martingale Level {level} started for {pair} {direction}")
+    logging.info(f"Martingale Level {level} - waiting for candle...")
     
-    # Execute trade and get REAL result
-    trade_result = await execute_and_check_trade(pair, direction)
+    # Wait for candle to complete and check result
+    trade_result = await wait_for_candle_close_and_check(pair, direction)
     
-    if trade_result["result"] == "ERROR":
-        return {"result": "LOSS", "open": 0, "close": 0}
+    if not bot_state["running"]:
+        return {"result": "STOPPED", "open": 0, "close": 0}
     
     # Save to DB
     signal = Signal(
@@ -465,9 +530,9 @@ async def run_single_trade_cycle():
     if not bot_state["running"]:
         return
     
-    # Step 4: Execute trade and check REAL result
-    logging.info("Trade starting now! Getting real-time prices...")
-    trade_result = await execute_and_check_trade(best["pair"], best["direction"])
+    # Step 4: Wait for candle to complete and check result
+    logging.info("Trade starting - waiting for M1 candle to complete...")
+    trade_result = await wait_for_candle_close_and_check(best["pair"], best["direction"])
     
     if not bot_state["running"]:
         return
@@ -485,7 +550,7 @@ async def run_single_trade_cycle():
         martingale_level=0,
         open_price=trade_result.get("open", 0),
         close_price=trade_result.get("close", 0),
-        result=trade_result["result"] if trade_result["result"] != "ERROR" else "LOSS"
+        result=trade_result["result"] if trade_result["result"] != "UNKNOWN" else "LOSS"
     )
     await db.signals.insert_one(signal.model_dump())
     
@@ -509,7 +574,7 @@ WIN ✅"""
         logging.info("TRADE WON!")
         
     else:
-        # LOSS or ERROR - Start Martingale Level 2
+        # LOSS - Start Martingale Level 2
         logging.info("Trade lost, starting Martingale Level 2...")
         
         result2 = await run_martingale(best["pair"], best["direction"], 2)
@@ -596,7 +661,7 @@ async def bot_main_loop():
     
     logging.info("Bot main loop started")
     
-    await send_telegram_message("🟢 Dfg_2k Analysis Bot Started\n🛰️ Monitoring 35 OTC pairs\n💎 Timeframe: M1\n⏱️ Signals every 3 minutes\n📊 Using REAL-TIME price data")
+    await send_telegram_message("🟢 Dfg_2k Analysis Bot Started\n🛰️ Monitoring 35 OTC pairs\n💎 Timeframe: M1\n⏱️ Signals every 3 minutes\n📊 Checking candle colors for WIN/LOSS")
     
     while bot_state["running"]:
         try:
@@ -701,11 +766,11 @@ async def test_telegram():
     success = await send_telegram_message("🔔 Test message from Dfg_2k Analysis Bot")
     return {"success": success}
 
-@api_router.get("/test-price/{pair}")
-async def test_price(pair: str):
-    """Test endpoint to check real-time price"""
-    price = await get_realtime_price(pair.replace("-", "/"))
-    return {"pair": pair, "price": price}
+@api_router.get("/test-candle/{pair}")
+async def test_candle(pair: str):
+    """Test endpoint to check latest candle"""
+    candle = await get_latest_candle(pair.replace("-", "/"))
+    return {"pair": pair, "candle": candle}
 
 # Include router
 app.include_router(api_router)
