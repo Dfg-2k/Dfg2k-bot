@@ -67,22 +67,20 @@ class Signal(BaseModel):
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     result: Optional[str] = None
     martingale_level: int = 0
-    entry_price: float = 0
+    open_price: float = 0
+    close_price: float = 0
 
 # ============== HELPER FUNCTIONS ==============
 
 def get_ny_time() -> datetime:
-    """Get current time in New York timezone (UTC-5)"""
     utc_now = datetime.now(timezone.utc)
     ny_offset = timedelta(hours=-5)
     return utc_now + ny_offset
 
 def format_time_ny(dt: datetime) -> str:
-    """Format datetime to HH:MM:SS"""
     return dt.strftime("%H:%M:%S")
 
 async def send_telegram_message(message: str) -> bool:
-    """Send message to Telegram"""
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         logging.warning("Telegram credentials not configured")
         return False
@@ -107,8 +105,34 @@ async def send_telegram_message(message: str) -> bool:
         logging.error(f"Error sending Telegram: {e}")
         return False
 
-async def fetch_market_data(symbol: str) -> Optional[Dict]:
-    """Fetch market data from Twelve Data API"""
+async def get_realtime_price(symbol: str) -> Optional[float]:
+    """Get real-time price from Twelve Data"""
+    if not TWELVE_DATA_API_KEY:
+        return None
+    
+    url = "https://api.twelvedata.com/price"
+    params = {
+        "symbol": symbol,
+        "apikey": TWELVE_DATA_API_KEY
+    }
+    
+    try:
+        async with httpx.AsyncClient() as http_client:
+            response = await http_client.get(url, params=params, timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                if "price" in data:
+                    price = float(data["price"])
+                    logging.info(f"Real-time price for {symbol}: {price}")
+                    return price
+            logging.error(f"Price API error: {response.text}")
+            return None
+    except Exception as e:
+        logging.error(f"Error getting price for {symbol}: {e}")
+        return None
+
+async def fetch_analysis_data(symbol: str) -> Optional[Dict]:
+    """Fetch data for analysis"""
     if not TWELVE_DATA_API_KEY:
         return None
     
@@ -131,13 +155,6 @@ async def fetch_market_data(symbol: str) -> Optional[Dict]:
     except Exception as e:
         logging.error(f"Error fetching data for {symbol}: {e}")
         return None
-
-async def get_current_price(symbol: str) -> Optional[float]:
-    """Get current price for a symbol"""
-    data = await fetch_market_data(symbol)
-    if data and "values" in data and len(data["values"]) > 0:
-        return float(data["values"][0]["close"])
-    return None
 
 def calculate_rsi(prices: List[float], period: int = 14) -> float:
     if len(prices) < period + 1:
@@ -183,7 +200,7 @@ async def analyze_all_pairs() -> Optional[Dict]:
         
         for pair in batch:
             try:
-                data = await fetch_market_data(pair)
+                data = await fetch_analysis_data(pair)
                 if not data or "values" not in data:
                     continue
                 
@@ -233,8 +250,7 @@ async def analyze_all_pairs() -> Optional[Dict]:
                     "ema9": ema9,
                     "ema21": ema21,
                     "stochastic": stochastic,
-                    "score": max(buy_score, sell_score),
-                    "entry_price": closes[-1]
+                    "score": max(buy_score, sell_score)
                 })
             except Exception as e:
                 logging.error(f"Error analyzing {pair}: {e}")
@@ -249,20 +265,57 @@ async def analyze_all_pairs() -> Optional[Dict]:
     all_analyses.sort(key=lambda x: x["score"], reverse=True)
     return all_analyses[0]
 
-async def check_trade_result(pair: str, direction: str, entry_price: float) -> str:
-    """Check if trade won or lost"""
-    current_price = await get_current_price(pair)
+async def execute_and_check_trade(pair: str, direction: str) -> Dict:
+    """
+    Execute trade and check REAL result:
+    1. Get OPEN price right now
+    2. Wait exactly 60 seconds
+    3. Get CLOSE price
+    4. Compare: BUY wins if close > open, SELL wins if close < open
+    """
     
-    if current_price is None:
-        import random
-        return "WIN" if random.random() < 0.7 else "LOSS"
+    # Step 1: Get OPEN price
+    open_price = await get_realtime_price(pair)
+    if open_price is None:
+        logging.error(f"Could not get open price for {pair}")
+        return {"result": "ERROR", "open": 0, "close": 0}
     
+    logging.info(f"TRADE START - {pair} {direction} - Open Price: {open_price}")
+    
+    # Step 2: Wait exactly 60 seconds for M1 candle
+    await asyncio.sleep(60)
+    
+    # Step 3: Get CLOSE price
+    close_price = await get_realtime_price(pair)
+    if close_price is None:
+        logging.error(f"Could not get close price for {pair}")
+        return {"result": "ERROR", "open": open_price, "close": 0}
+    
+    logging.info(f"TRADE END - {pair} - Close Price: {close_price}")
+    
+    # Step 4: Determine result
     if direction == "BUY":
-        # BUY wins if price went UP
-        return "WIN" if current_price > entry_price else "LOSS"
+        # BUY wins if price went UP (close > open)
+        if close_price > open_price:
+            result = "WIN"
+            logging.info(f"BUY WIN! Price went UP: {open_price} -> {close_price}")
+        else:
+            result = "LOSS"
+            logging.info(f"BUY LOSS! Price went DOWN: {open_price} -> {close_price}")
     else:
-        # SELL wins if price went DOWN
-        return "WIN" if current_price < entry_price else "LOSS"
+        # SELL wins if price went DOWN (close < open)
+        if close_price < open_price:
+            result = "WIN"
+            logging.info(f"SELL WIN! Price went DOWN: {open_price} -> {close_price}")
+        else:
+            result = "LOSS"
+            logging.info(f"SELL LOSS! Price went UP: {open_price} -> {close_price}")
+    
+    return {
+        "result": result,
+        "open": open_price,
+        "close": close_price
+    }
 
 async def send_summary_report():
     """Send summary of last 15 trades"""
@@ -313,12 +366,12 @@ Channel Overall Win Rate: {overall_rate}% ({total_wins}W/{total_losses}L)"""
         "type": "summary"
     })
 
-async def run_martingale(pair: str, direction: str, level: int):
-    """Run martingale levels 2 and 3"""
+async def run_martingale(pair: str, direction: str, level: int) -> Dict:
+    """Run martingale - trade again with same direction"""
     global bot_state
     
     if not bot_state["running"]:
-        return "STOPPED"
+        return {"result": "STOPPED", "open": 0, "close": 0}
     
     # Send Martingale message
     martingale_msg = f"""Dfg_2k Analysis
@@ -333,14 +386,15 @@ async def run_martingale(pair: str, direction: str, level: int):
         "type": "martingale"
     })
     
-    logging.info(f"Martingale Level {level} started")
+    logging.info(f"Martingale Level {level} started for {pair} {direction}")
     
-    # Get entry price
-    entry_price = await get_current_price(pair)
-    if entry_price is None:
-        entry_price = 0
+    # Execute trade and get REAL result
+    trade_result = await execute_and_check_trade(pair, direction)
     
-    # Save martingale signal to DB
+    if trade_result["result"] == "ERROR":
+        return {"result": "LOSS", "open": 0, "close": 0}
+    
+    # Save to DB
     signal = Signal(
         pair=pair,
         direction=direction,
@@ -351,27 +405,13 @@ async def run_martingale(pair: str, direction: str, level: int):
         ema21=1,
         stochastic=50,
         martingale_level=level,
-        entry_price=entry_price
+        open_price=trade_result["open"],
+        close_price=trade_result["close"],
+        result=trade_result["result"]
     )
     await db.signals.insert_one(signal.model_dump())
     
-    # Wait 1 minute for trade to complete
-    logging.info("Waiting 1 minute for martingale trade...")
-    await asyncio.sleep(60)
-    
-    if not bot_state["running"]:
-        return "STOPPED"
-    
-    # Check result
-    result = await check_trade_result(pair, direction, entry_price)
-    
-    # Update signal in DB
-    await db.signals.update_one(
-        {"id": signal.id},
-        {"$set": {"result": result}}
-    )
-    
-    return result
+    return trade_result
 
 async def run_single_trade_cycle():
     """Run one complete trade cycle"""
@@ -380,39 +420,22 @@ async def run_single_trade_cycle():
     if not bot_state["running"]:
         return
     
-    # Step 1: Analyze market and get best signal
+    # Step 1: Analyze market
     logging.info("Analyzing market...")
     best = await analyze_all_pairs()
     
     if not best:
-        logging.warning("Could not analyze market")
+        logging.warning("Could not analyze market, retrying in 60s...")
         await asyncio.sleep(60)
         return
     
     entry_time = get_ny_time() + timedelta(minutes=2)
     entry_time_str = format_time_ny(entry_time)
     
-    # Create signal
-    signal = Signal(
-        pair=best["pair"],
-        direction=best["direction"],
-        entry_time=entry_time_str,
-        confidence=best["confidence"],
-        rsi=best["rsi"],
-        ema9=best["ema9"],
-        ema21=best["ema21"],
-        stochastic=best["stochastic"],
-        martingale_level=0,
-        entry_price=best["entry_price"]
-    )
-    
-    # Save to DB
-    await db.signals.insert_one(signal.model_dump())
-    
-    # Step 2: Send signal to Telegram
-    otc_pair = signal.pair.replace("/", "") + "-OTC"
-    direction_emoji = "🟢" if signal.direction == "BUY" else "🔴"
-    direction_text = "Buy" if signal.direction == "BUY" else "Sell"
+    # Step 2: Send signal
+    otc_pair = best["pair"].replace("/", "") + "-OTC"
+    direction_emoji = "🟢" if best["direction"] == "BUY" else "🔴"
+    direction_text = "Buy" if best["direction"] == "BUY" else "Sell"
     
     signal_msg = f"""Dfg_2k Analysis
 🛰️ POCKET OPTION
@@ -428,40 +451,46 @@ async def run_single_trade_cycle():
     
     await db.telegram_messages.insert_one({
         "id": str(uuid.uuid4()),
-        "signal_id": signal.id,
         "message": signal_msg,
         "sent_at": datetime.now(timezone.utc).isoformat(),
         "type": "signal"
     })
     
-    logging.info(f"Signal sent: {otc_pair} {signal.direction}")
+    logging.info(f"Signal sent: {otc_pair} {best['direction']}")
     
     # Step 3: Wait 2 minutes for entry time
-    logging.info("Waiting 2 minutes for entry...")
+    logging.info("Waiting 2 minutes for entry time...")
     await asyncio.sleep(120)
     
     if not bot_state["running"]:
         return
     
-    # Step 4: Wait 1 minute for trade to complete (M1)
-    logging.info("Trade started, waiting 1 minute...")
-    await asyncio.sleep(60)
+    # Step 4: Execute trade and check REAL result
+    logging.info("Trade starting now! Getting real-time prices...")
+    trade_result = await execute_and_check_trade(best["pair"], best["direction"])
     
     if not bot_state["running"]:
         return
     
-    # Step 5: Check result
-    result = await check_trade_result(signal.pair, signal.direction, signal.entry_price)
-    
-    # Update signal in DB
-    await db.signals.update_one(
-        {"id": signal.id},
-        {"$set": {"result": result}}
+    # Save signal to DB
+    signal = Signal(
+        pair=best["pair"],
+        direction=best["direction"],
+        entry_time=entry_time_str,
+        confidence=best["confidence"],
+        rsi=best["rsi"],
+        ema9=best["ema9"],
+        ema21=best["ema21"],
+        stochastic=best["stochastic"],
+        martingale_level=0,
+        open_price=trade_result.get("open", 0),
+        close_price=trade_result.get("close", 0),
+        result=trade_result["result"] if trade_result["result"] != "ERROR" else "LOSS"
     )
+    await db.signals.insert_one(signal.model_dump())
     
-    # Step 6: Handle result
-    if result == "WIN":
-        # WIN - Send message
+    # Step 5: Handle result
+    if trade_result["result"] == "WIN":
         bot_state["total_wins"] += 1
         bot_state["trade_count_since_report"] += 1
         
@@ -472,24 +501,23 @@ WIN ✅"""
         
         await db.telegram_messages.insert_one({
             "id": str(uuid.uuid4()),
-            "signal_id": signal.id,
             "message": win_msg,
             "sent_at": datetime.now(timezone.utc).isoformat(),
             "type": "result"
         })
         
-        logging.info("Trade WON!")
+        logging.info("TRADE WON!")
         
     else:
-        # LOSS - Start Martingale Level 2
+        # LOSS or ERROR - Start Martingale Level 2
         logging.info("Trade lost, starting Martingale Level 2...")
         
-        result2 = await run_martingale(signal.pair, signal.direction, 2)
+        result2 = await run_martingale(best["pair"], best["direction"], 2)
         
-        if result2 == "STOPPED":
+        if result2["result"] == "STOPPED":
             return
         
-        if result2 == "WIN":
+        if result2["result"] == "WIN":
             bot_state["total_wins"] += 1
             bot_state["trade_count_since_report"] += 1
             
@@ -511,12 +539,12 @@ WIN ✅"""
             # Martingale Level 3
             logging.info("Martingale Level 2 lost, starting Level 3...")
             
-            result3 = await run_martingale(signal.pair, signal.direction, 3)
+            result3 = await run_martingale(best["pair"], best["direction"], 3)
             
-            if result3 == "STOPPED":
+            if result3["result"] == "STOPPED":
                 return
             
-            if result3 == "WIN":
+            if result3["result"] == "WIN":
                 bot_state["total_wins"] += 1
                 bot_state["trade_count_since_report"] += 1
                 
@@ -535,7 +563,7 @@ WIN ✅"""
                 logging.info("Martingale Level 3 WON!")
                 
             else:
-                # Final LOSS after all 3 levels
+                # Final LOSS
                 bot_state["total_losses"] += 1
                 bot_state["trade_count_since_report"] += 1
                 
@@ -553,12 +581,12 @@ Loss ❌"""
                 
                 logging.info("Final LOSS after 3 martingale levels")
     
-    # Step 7: Check if we need to send summary (every 15 trades)
+    # Step 6: Check if we need summary
     if bot_state["trade_count_since_report"] >= 15:
         await send_summary_report()
         bot_state["trade_count_since_report"] = 0
     
-    # Step 8: Wait 3 minutes before next signal
+    # Step 7: Wait 3 minutes before next signal
     logging.info("Waiting 3 minutes before next signal...")
     await asyncio.sleep(180)
 
@@ -568,7 +596,7 @@ async def bot_main_loop():
     
     logging.info("Bot main loop started")
     
-    await send_telegram_message("🟢 Dfg_2k Analysis Bot Started\n🛰️ Monitoring 35 OTC pairs\n💎 Timeframe: M1\n⏱️ Signals every 3 minutes")
+    await send_telegram_message("🟢 Dfg_2k Analysis Bot Started\n🛰️ Monitoring 35 OTC pairs\n💎 Timeframe: M1\n⏱️ Signals every 3 minutes\n📊 Using REAL-TIME price data")
     
     while bot_state["running"]:
         try:
@@ -578,6 +606,8 @@ async def bot_main_loop():
             break
         except Exception as e:
             logging.error(f"Error in bot loop: {e}")
+            import traceback
+            traceback.print_exc()
             await asyncio.sleep(30)
     
     logging.info("Bot main loop ended")
@@ -670,6 +700,12 @@ async def get_pairs():
 async def test_telegram():
     success = await send_telegram_message("🔔 Test message from Dfg_2k Analysis Bot")
     return {"success": success}
+
+@api_router.get("/test-price/{pair}")
+async def test_price(pair: str):
+    """Test endpoint to check real-time price"""
+    price = await get_realtime_price(pair.replace("-", "/"))
+    return {"pair": pair, "price": price}
 
 # Include router
 app.include_router(api_router)
