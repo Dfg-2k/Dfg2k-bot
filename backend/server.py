@@ -167,7 +167,7 @@ async def get_latest_candle(symbol: str) -> Optional[Dict]:
     params = {
         "symbol": symbol,
         "interval": "1min",
-        "outputsize": 2,
+        "outputsize": 1,
         "apikey": TWELVE_DATA_API_KEY
     }
     
@@ -176,10 +176,9 @@ async def get_latest_candle(symbol: str) -> Optional[Dict]:
             response = await http_client.get(url, params=params, timeout=30)
             if response.status_code == 200:
                 data = response.json()
-                if "values" in data and len(data["values"]) >= 2:
-                    # values[0] = current incomplete candle
-                    # values[1] = last complete candle
-                    candle = data["values"][1]
+                if "values" in data and len(data["values"]) >= 1:
+                    # values[0] = most recent candle
+                    candle = data["values"][0]
                     return {
                         "open": float(candle["open"]),
                         "high": float(candle["high"]),
@@ -342,7 +341,6 @@ async def wait_for_candle_close_and_check(pair: str, direction: str) -> Dict:
     
     if candle is None:
         logging.error(f"Could not get candle data for {pair}")
-        # Fallback to price comparison
         return {"result": "UNKNOWN", "open": 0, "close": 0}
     
     open_price = candle["open"]
@@ -352,29 +350,21 @@ async def wait_for_candle_close_and_check(pair: str, direction: str) -> Dict:
     
     # Determine result based on candle color
     if direction == "BUY":
-        # BUY wins if candle is GREEN (close > open)
+        # BUY wins if price went UP (close > open) - GREEN candle
         if close_price > open_price:
             result = "WIN"
             logging.info(f"BUY WIN - GREEN candle: {open_price} -> {close_price}")
-        elif close_price < open_price:
+        else:
             result = "LOSS"
             logging.info(f"BUY LOSS - RED candle: {open_price} -> {close_price}")
-        else:
-            # Doji candle (open == close) - consider as loss to be safe
-            result = "LOSS"
-            logging.info(f"BUY LOSS - DOJI candle: {open_price} = {close_price}")
     else:  # SELL
-        # SELL wins if candle is RED (close < open)
+        # SELL wins if price went DOWN (close < open) - RED candle
         if close_price < open_price:
             result = "WIN"
             logging.info(f"SELL WIN - RED candle: {open_price} -> {close_price}")
-        elif close_price > open_price:
+        else:
             result = "LOSS"
             logging.info(f"SELL LOSS - GREEN candle: {open_price} -> {close_price}")
-        else:
-            # Doji candle
-            result = "LOSS"
-            logging.info(f"SELL LOSS - DOJI candle: {open_price} = {close_price}")
     
     return {
         "result": result,
@@ -661,8 +651,6 @@ async def bot_main_loop():
     
     logging.info("Bot main loop started")
     
-    await send_telegram_message("🟢 Dfg_2k Analysis Bot Started\n🛰️ Monitoring 35 OTC pairs\n💎 Timeframe: M1\n⏱️ Signals every 3 minutes\n📊 Checking candle colors for WIN/LOSS")
-    
     while bot_state["running"]:
         try:
             await run_single_trade_cycle()
@@ -727,7 +715,8 @@ async def stop_bot():
             pass
         bot_task = None
     
-    await send_telegram_message("🔴 Dfg_2k Analysis Bot Stopped")
+    # Don't send stop message
+    pass
     
     return {"message": "Bot stopped successfully", "running": False}
 
