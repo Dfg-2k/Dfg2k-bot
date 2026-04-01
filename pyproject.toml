@@ -1,0 +1,9 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trading-bot"
+version = "1.0.0"
+description = "Dfg_2k Analysis Trading Bot for Pocket Option"
+requires-python = ">=3.9"

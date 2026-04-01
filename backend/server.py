@@ -791,7 +791,7 @@ logger = logging.getLogger(__name__)
 
 @app.on_event("startup")
 async def startup_event():
-    global bot_state
+    global bot_state, bot_task
     wins = await db.signals.count_documents({"result": "WIN"})
     losses = await db.signals.count_documents({"result": "LOSS"})
     total_signals = await db.signals.count_documents({})
@@ -801,6 +801,11 @@ async def startup_event():
     bot_state["signals_sent"] = total_signals
     
     logging.info("Trading Bot API started")
+    
+    # Auto-start bot on server startup for 24/7 operation
+    bot_state["running"] = True
+    bot_task = asyncio.create_task(bot_main_loop())
+    logging.info("Bot auto-started for 24/7 operation")
 
 @app.on_event("shutdown")
 async def shutdown_event():
